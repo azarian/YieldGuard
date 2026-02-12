@@ -1,36 +1,120 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# YieldGuard
+
+Solar system monitoring and service provider marketplace built with **Next.js**, **Supabase**, and **Tailwind CSS**.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Framework | Next.js 16 (App Router) |
+| Database | Supabase (PostgreSQL) |
+| Auth | Supabase Auth |
+| Styling | Tailwind CSS v4 |
+| Hosting | Vercel |
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+ and npm
+- A [Supabase](https://supabase.com) account (free tier works)
+
+### 1. Clone & Install
+
+```bash
+git clone <your-repo-url>
+cd YieldGuard
+npm install
+```
+
+### 2. Set Up Supabase
+
+1. Go to [supabase.com](https://supabase.com) and create a new project.
+2. Once the project is ready, go to **Settings → API** and copy:
+   - **Project URL** (e.g. `https://abc123.supabase.co`)
+   - **anon public key**
+3. Create a `.env.local` file in the project root (use `.env.local.example` as a template):
+
+```bash
+cp .env.local.example .env.local
+```
+
+4. Fill in your Supabase credentials:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
+```
+
+### 3. Run the Database Migration
+
+In the Supabase Dashboard, go to **SQL Editor** and run the contents of:
+
+```
+supabase/migrations/00001_create_profiles.sql
+```
+
+This creates the `profiles` table with Row-Level Security policies.
+
+### 4. Configure Supabase Auth
+
+In the Supabase Dashboard, go to **Authentication → URL Configuration** and add:
+- **Site URL**: `http://localhost:3000` (for local development)
+- **Redirect URLs**: `http://localhost:3000/**`
+
+### 5. Run Locally
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploying to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Push this repo to GitHub.
+2. Go to [vercel.com](https://vercel.com) and click **"Add New" → "Project"**.
+3. Import your GitHub repository.
+4. In the Vercel project settings, add the environment variables:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+5. Click **Deploy**.
+6. After deployment, copy your Vercel production URL (e.g. `https://yieldguard.vercel.app`).
+7. In the Supabase Dashboard, go to **Authentication → URL Configuration** and add your production URL:
+   - **Site URL**: `https://yieldguard.vercel.app`
+   - **Redirect URLs**: `https://yieldguard.vercel.app/**`
 
-## Learn More
+Every subsequent `git push` to `main` will trigger an automatic redeployment.
 
-To learn more about Next.js, take a look at the following resources:
+## Project Structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+src/
+├── app/
+│   ├── auth/signout/route.ts   # Sign-out API route
+│   ├── dashboard/page.tsx      # Protected, role-aware dashboard
+│   ├── login/page.tsx          # Login form
+│   ├── signup/page.tsx         # Sign-up form with role picker
+│   ├── globals.css             # Global styles
+│   ├── layout.tsx              # Root layout with Navbar
+│   └── page.tsx                # Public landing page
+├── components/
+│   └── Navbar.tsx              # Auth-aware navigation bar
+├── lib/supabase/
+│   ├── client.ts               # Browser Supabase client
+│   └── server.ts               # Server-side Supabase client
+└── middleware.ts                # Auth guard for protected routes
+supabase/
+└── migrations/
+    └── 00001_create_profiles.sql
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## User Roles
 
-## Deploy on Vercel
+| Role | Description |
+|------|-------------|
+| `owner` | Solar system owner (home or small business) |
+| `provider` | Service provider (cleaning, maintenance, etc.) |
+| `admin` | Platform administrator (set manually in Supabase) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+> **Note**: The `admin` role cannot be selected during sign-up. To make a user an admin, update their `role` directly in the Supabase `profiles` table.
