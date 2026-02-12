@@ -1,11 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
+import createIntlMiddleware from "next-intl/middleware";
 import { NextResponse, type NextRequest } from "next/server";
+import { routing } from "@/i18n/routing";
+
+const intlMiddleware = createIntlMiddleware(routing);
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  // 1. Run the intl middleware first to handle locale detection/redirect
+  const intlResponse = intlMiddleware(request);
 
+  // 2. Create the Supabase client, piping cookies through the intl response
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -15,56 +19,57 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({
-            request,
+          cookiesToSet.forEach(({ name, value, options }) => {
+            intlResponse.cookies.set(name, value, options);
           });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
         },
       },
     }
   );
 
-  // IMPORTANT: Do not add logic between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very
-  // hard to debug issues with users being randomly logged out.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // 3. Refresh the session (important for keeping users logged in)
+  //    Wrapped in try-catch: in dev mode the edge runtime sandbox may block
+  //    outgoing fetch calls. When that happens, fall through without auth guards
+  //    and let the page-level server components handle authentication instead.
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch {
+    // fetch to Supabase failed (e.g. edge-runtime sandbox in dev mode).
+    // Return the intl response as-is — pages will do their own auth check.
+    return intlResponse;
+  }
 
-  // If the user is not signed in and trying to access a protected route,
-  // redirect them to the login page.
-  if (!user && request.nextUrl.pathname.startsWith("/dashboard")) {
+  // 4. Extract the pathname without the locale prefix for auth checks
+  const { pathname } = request.nextUrl;
+  // Matches /en/dashboard, /he/dashboard, etc.
+  const isDashboard = /^\/[a-z]{2}\/dashboard/.test(pathname);
+  const isLogin = /^\/[a-z]{2}\/login$/.test(pathname);
+  const isSignup = /^\/[a-z]{2}\/signup$/.test(pathname);
+
+  // Extract the locale from the path (e.g. "/en/..." -> "en")
+  const localeMatch = pathname.match(/^\/([a-z]{2})\//);
+  const locale = localeMatch ? localeMatch[1] : routing.defaultLocale;
+
+  // 5. Auth guards
+  if (!user && isDashboard) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = `/${locale}/login`;
     return NextResponse.redirect(url);
   }
 
-  // If the user is signed in and trying to access login/signup,
-  // redirect them to the dashboard.
-  if (user && (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup")) {
+  if (user && (isLogin || isSignup)) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = `/${locale}/dashboard`;
     return NextResponse.redirect(url);
   }
 
-  return supabaseResponse;
+  return intlResponse;
 }
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
     "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
-

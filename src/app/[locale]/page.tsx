@@ -1,6 +1,10 @@
-import Link from "next/link";
+import { useTranslations } from "next-intl";
+import { Link } from "@/i18n/navigation";
 
 export default function Home() {
+  const t = useTranslations("home");
+  const tc = useTranslations("common");
+
   return (
     <div className="flex min-h-screen flex-col">
       {/* Hero Section */}
@@ -22,18 +26,16 @@ export default function Home() {
               />
             </svg>
             <h1 className="text-4xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-5xl">
-              YieldGuard
+              {t("heroTitle")}
             </h1>
           </div>
 
           <p className="mx-auto mb-4 max-w-2xl text-lg text-gray-600 dark:text-gray-300 sm:text-xl">
-            Monitor your solar system performance, maximize energy yield, and
-            connect with trusted service providers — all in one place.
+            {t("heroSubtitle")}
           </p>
 
           <p className="mx-auto mb-10 max-w-xl text-sm text-gray-500 dark:text-gray-400">
-            Whether you own a home solar setup or provide maintenance services,
-            YieldGuard keeps everything running at peak efficiency.
+            {t("heroDescription")}
           </p>
 
           {/* CTA Buttons */}
@@ -42,13 +44,13 @@ export default function Home() {
               href="/signup"
               className="inline-flex h-12 w-full items-center justify-center rounded-lg bg-yellow-500 px-8 text-base font-semibold text-white shadow-sm transition-colors hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 sm:w-auto"
             >
-              Get Started
+              {t("getStarted")}
             </Link>
             <Link
               href="/login"
               className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-gray-300 bg-white px-8 text-base font-semibold text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 sm:w-auto"
             >
-              Log In
+              {t("logIn")}
             </Link>
           </div>
         </div>
@@ -58,31 +60,28 @@ export default function Home() {
           <div className="rounded-xl border border-gray-200 p-6 dark:border-gray-700">
             <div className="mb-3 text-3xl">☀️</div>
             <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              Solar Owners
+              {t("featureOwnersTitle")}
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Track your system&apos;s performance, get alerts, and request
-              maintenance with a single click.
+              {t("featureOwnersDesc")}
             </p>
           </div>
           <div className="rounded-xl border border-gray-200 p-6 dark:border-gray-700">
             <div className="mb-3 text-3xl">🔧</div>
             <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              Service Providers
+              {t("featureProvidersTitle")}
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Manage orders, schedules, and customer communication from your
-              dedicated dashboard.
+              {t("featureProvidersDesc")}
             </p>
           </div>
           <div className="rounded-xl border border-gray-200 p-6 dark:border-gray-700">
             <div className="mb-3 text-3xl">📊</div>
             <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
-              Real-Time Insights
+              {t("featureInsightsTitle")}
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Actionable data on energy yield, cleaning schedules, and system
-              health — at your fingertips.
+              {t("featureInsightsDesc")}
             </p>
           </div>
         </div>
@@ -90,8 +89,9 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="py-6 text-center text-sm text-gray-400 dark:text-gray-500">
-        &copy; {new Date().getFullYear()} YieldGuard. All rights reserved.
+        {tc("footer", { year: new Date().getFullYear() })}
       </footer>
     </div>
   );
 }
+

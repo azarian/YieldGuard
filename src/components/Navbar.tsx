@@ -1,26 +1,28 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { routing, localeNames } from "@/i18n/routing";
 import type { User } from "@supabase/supabase-js";
 
 export default function Navbar() {
   const router = useRouter();
+  const pathname = usePathname();
+  const locale = useLocale();
+  const t = useTranslations("navbar");
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const supabase = createClient();
 
-    // Get the initial session
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
       setLoading(false);
     });
 
-    // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -37,6 +39,13 @@ export default function Navbar() {
     router.push("/");
     router.refresh();
   }
+
+  function switchLocale(newLocale: string) {
+    router.replace(pathname, { locale: newLocale as "en" | "he" });
+  }
+
+  // Determine the other locale for the toggle
+  const otherLocale = routing.locales.find((l) => l !== locale) ?? "en";
 
   return (
     <nav className="border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950">
@@ -61,6 +70,15 @@ export default function Navbar() {
 
         {/* Right side */}
         <div className="flex items-center gap-4">
+          {/* Language switcher */}
+          <button
+            onClick={() => switchLocale(otherLocale)}
+            className="rounded-md px-2.5 py-1.5 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            title={localeNames[otherLocale]}
+          >
+            {localeNames[otherLocale]}
+          </button>
+
           {loading ? (
             <div className="h-5 w-20 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
           ) : user ? (
@@ -69,13 +87,19 @@ export default function Navbar() {
                 href="/dashboard"
                 className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
               >
-                Dashboard
+                {t("dashboard")}
+              </Link>
+              <Link
+                href="/dashboard/system"
+                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
+              >
+                {t("mySystem")}
               </Link>
               <button
                 onClick={handleSignOut}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
               >
-                Log Out
+                {t("logOut")}
               </button>
             </>
           ) : (
@@ -84,13 +108,13 @@ export default function Navbar() {
                 href="/login"
                 className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
               >
-                Log In
+                {t("logIn")}
               </Link>
               <Link
                 href="/signup"
                 className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-yellow-600"
               >
-                Sign Up
+                {t("signUp")}
               </Link>
             </>
           )}
@@ -99,4 +123,3 @@ export default function Navbar() {
     </nav>
   );
 }
-

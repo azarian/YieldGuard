@@ -1,16 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useTranslations } from "next-intl";
+import { Link, useRouter } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-export default function SignUpPage() {
+export default function LoginPage() {
   const router = useRouter();
+  const t = useTranslations("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [role, setRole] = useState<"owner" | "provider">("owner");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -21,21 +20,13 @@ export default function SignUpPage() {
 
     const supabase = createClient();
 
-    // Sign up with role and full_name stored in user metadata.
-    // A database trigger will automatically create the profile row.
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
-      options: {
-        data: {
-          full_name: fullName,
-          role,
-        },
-      },
     });
 
-    if (signUpError) {
-      setError(signUpError.message);
+    if (signInError) {
+      setError(signInError.message);
       setLoading(false);
       return;
     }
@@ -65,34 +56,18 @@ export default function SignUpPage() {
             YieldGuard
           </Link>
           <h2 className="mt-4 text-2xl font-semibold text-gray-900 dark:text-white">
-            Create your account
+            {t("title")}
           </h2>
           <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Join YieldGuard to manage your solar systems or offer services.
+            {t("subtitle")}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Full Name */}
-          <div>
-            <label htmlFor="fullName" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Full Name
-            </label>
-            <input
-              id="fullName"
-              type="text"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              placeholder="John Doe"
-            />
-          </div>
-
           {/* Email */}
           <div>
             <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Email
+              {t("email")}
             </label>
             <input
               id="email"
@@ -101,41 +76,24 @@ export default function SignUpPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              placeholder="you@example.com"
+              placeholder={t("emailPlaceholder")}
             />
           </div>
 
           {/* Password */}
           <div>
             <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Password
+              {t("password")}
             </label>
             <input
               id="password"
               type="password"
               required
-              minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              placeholder="••••••••"
+              placeholder={t("passwordPlaceholder")}
             />
-          </div>
-
-          {/* Role */}
-          <div>
-            <label htmlFor="role" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              I am a...
-            </label>
-            <select
-              id="role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as "owner" | "provider")}
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-            >
-              <option value="owner">Solar System Owner</option>
-              <option value="provider">Service Provider</option>
-            </select>
           </div>
 
           {/* Error */}
@@ -151,17 +109,18 @@ export default function SignUpPage() {
             disabled={loading}
             className="flex w-full items-center justify-center rounded-lg bg-yellow-500 px-4 py-2.5 text-base font-semibold text-white shadow-sm transition-colors hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 disabled:opacity-50"
           >
-            {loading ? "Creating account..." : "Sign Up"}
+            {loading ? t("submitting") : t("submit")}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
-          Already have an account?{" "}
-          <Link href="/login" className="font-medium text-yellow-600 hover:text-yellow-500">
-            Log in
+          {t("noAccount")}{" "}
+          <Link href="/signup" className="font-medium text-yellow-600 hover:text-yellow-500">
+            {t("signUpLink")}
           </Link>
         </p>
       </div>
     </div>
   );
 }
+
