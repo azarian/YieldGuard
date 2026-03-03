@@ -194,8 +194,9 @@ export default function SystemPage() {
 
       // Refresh system and sync data
       await fetchSystem();
-    } catch {
-      setSyncMessage({ type: "error", text: t("syncError") });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      setSyncMessage({ type: "error", text: `${t("syncError")} (${msg})` });
     }
 
     setSyncing(false);

@@ -95,6 +95,12 @@ export default function Navbar() {
               >
                 {t("mySystem")}
               </Link>
+              <Link
+                href="/dashboard/analysis"
+                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
+              >
+                {t("analysis")}
+              </Link>
               <button
                 onClick={handleSignOut}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"

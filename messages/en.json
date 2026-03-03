@@ -6,6 +6,7 @@
   "navbar": {
     "dashboard": "Dashboard",
     "mySystem": "My System",
+    "analysis": "Analysis",
     "logIn": "Log In",
     "logOut": "Log Out",
     "signUp": "Sign Up"
@@ -123,5 +124,32 @@
     "instructionStep3Desc": "If you haven't generated an API key before, you'll need to acknowledge the SolarEdge API Terms & Conditions. After that, your API key will be displayed. Copy it and paste it in the field above.",
     "instructionStep4Title": "Step 4: Find your Site ID",
     "instructionStep4Desc": "Your Site ID is a numeric identifier for your solar installation. You can find it in the URL bar when viewing your site on the monitoring portal — look for \"siteId=\" followed by a number (e.g. siteId=1234567). Alternatively, it's shown on the site's Dashboard page under the site name."
+  },
+  "analysis": {
+    "title": "Energy Analysis",
+    "backToDashboard": "Dashboard",
+    "refresh": "Refresh",
+    "notAuthenticated": "Please log in to view analysis.",
+    "fetchError": "Failed to load analysis data.",
+    "retry": "Try Again",
+    "totalEnergy": "Total Energy (7 days)",
+    "avgDaily": "Avg Daily Production",
+    "peakPower": "Peak Power",
+    "currentPower": "Current Power",
+    "producing": "Currently producing",
+    "notProducing": "Not producing",
+    "daysAnalyzed": "{count} days analyzed",
+    "dailyEnergyChart": "Daily Energy Production",
+    "bestDay": "Best Production Day",
+    "worstDay": "Lowest Production Day",
+    "consistency": "Production Consistency",
+    "consistencyGood": "Highly consistent output",
+    "consistencyFair": "Moderate variability",
+    "consistencyPoor": "High variability — check for issues",
+    "lifetimeEnergy": "Lifetime Energy",
+    "lastMonth": "Last Month",
+    "avgActivePower": "Avg Active Power",
+    "activeIntervals": "{active} of {total} intervals active",
+    "analyzedAt": "Analysis generated at {date}"
   }
 }

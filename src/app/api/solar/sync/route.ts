@@ -38,7 +38,9 @@ export async function POST() {
     );
   }
 
-  const { site_id: siteId, api_key: apiKey, id: systemId } = system;
+  const siteId = system.site_id.trim();
+  const apiKey = system.api_key.trim();
+  const systemId = system.id;
 
   // 3. Calculate date range (last 7 days)
   const endDate = new Date();
@@ -52,36 +54,35 @@ export async function POST() {
 
   try {
     // 4. Fetch from all three SolarEdge endpoints in parallel
+    const overviewUrl = `${SOLAREDGE_BASE}/site/${siteId}/overview?api_key=${apiKey}`;
+    const energyUrl = `${SOLAREDGE_BASE}/site/${siteId}/energy?timeUnit=DAY&startDate=${startDateStr}&endDate=${endDateStr}&api_key=${apiKey}`;
+    const powerUrl = `${SOLAREDGE_BASE}/site/${siteId}/power?startTime=${encodeURIComponent(startDateTimeStr)}&endTime=${encodeURIComponent(endDateTimeStr)}&api_key=${apiKey}`;
+
     const [overviewRes, energyRes, powerRes] = await Promise.all([
-      // Site Overview
-      fetch(
-        `${SOLAREDGE_BASE}/site/${siteId}/overview?api_key=${apiKey}`
-      ),
-      // Energy (daily kWh)
-      fetch(
-        `${SOLAREDGE_BASE}/site/${siteId}/energy?timeUnit=DAY&startDate=${startDateStr}&endDate=${endDateStr}&api_key=${apiKey}`
-      ),
-      // Power (15-min intervals)
-      fetch(
-        `${SOLAREDGE_BASE}/site/${siteId}/power?startTime=${encodeURIComponent(startDateTimeStr)}&endTime=${encodeURIComponent(endDateTimeStr)}&api_key=${apiKey}`
-      ),
+      fetch(overviewUrl),
+      fetch(energyUrl),
+      fetch(powerUrl),
     ]);
+
+    // Read all response bodies (even on error, SolarEdge returns useful info)
+    const overviewData = await overviewRes.json().catch(() => null);
+    const energyData = await energyRes.json().catch(() => null);
+    const powerData = await powerRes.json().catch(() => null);
 
     // Check for API errors
     if (!overviewRes.ok || !energyRes.ok || !powerRes.ok) {
       const errors = [];
-      if (!overviewRes.ok) errors.push(`Overview: ${overviewRes.status}`);
-      if (!energyRes.ok) errors.push(`Energy: ${energyRes.status}`);
-      if (!powerRes.ok) errors.push(`Power: ${powerRes.status}`);
+      if (!overviewRes.ok)
+        errors.push(`Overview ${overviewRes.status}: ${JSON.stringify(overviewData)}`);
+      if (!energyRes.ok)
+        errors.push(`Energy ${energyRes.status}: ${JSON.stringify(energyData)}`);
+      if (!powerRes.ok)
+        errors.push(`Power ${powerRes.status}: ${JSON.stringify(powerData)}`);
       return NextResponse.json(
-        { error: `SolarEdge API error: ${errors.join(", ")}` },
+        { error: `SolarEdge API error — ${errors.join(" | ")}` },
         { status: 502 }
       );
     }
-
-    const overviewData = await overviewRes.json();
-    const energyData = await energyRes.json();
-    const powerData = await powerRes.json();
 
     // 5. Delete old sync data for this system, then insert fresh
     await supabase

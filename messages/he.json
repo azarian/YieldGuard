@@ -6,6 +6,7 @@
   "navbar": {
     "dashboard": "לוח בקרה",
     "mySystem": "המערכת שלי",
+    "analysis": "ניתוח",
     "logIn": "התחברות",
     "logOut": "התנתקות",
     "signUp": "הרשמה"
@@ -123,5 +124,32 @@
     "instructionStep3Desc": "אם לא יצרתם מפתח API בעבר, תצטרכו לאשר את תנאי השימוש של SolarEdge API. לאחר מכן, מפתח ה-API שלכם יוצג. העתיקו אותו והדביקו אותו בשדה למעלה.",
     "instructionStep4Title": "שלב 4: מצאו את מזהה האתר שלכם",
     "instructionStep4Desc": "מזהה האתר שלכם הוא מספר מזהה של ההתקנה הסולארית. תוכלו למצוא אותו בשורת הכתובת בדפדפן כשאתם צופים באתר בפורטל הניטור — חפשו \"siteId=\" ואחריו מספר (לדוגמה siteId=1234567). לחלופין, הוא מוצג בדף הראשי של האתר מתחת לשם האתר."
+  },
+  "analysis": {
+    "title": "ניתוח אנרגיה",
+    "backToDashboard": "לוח בקרה",
+    "refresh": "רענון",
+    "notAuthenticated": "יש להתחבר כדי לצפות בניתוח.",
+    "fetchError": "נכשל בטעינת נתוני הניתוח.",
+    "retry": "נסו שוב",
+    "totalEnergy": "אנרגיה כוללת (7 ימים)",
+    "avgDaily": "ייצור יומי ממוצע",
+    "peakPower": "הספק שיא",
+    "currentPower": "הספק נוכחי",
+    "producing": "מייצר כרגע",
+    "notProducing": "לא מייצר",
+    "daysAnalyzed": "{count} ימים נותחו",
+    "dailyEnergyChart": "ייצור אנרגיה יומי",
+    "bestDay": "יום הייצור הגבוה ביותר",
+    "worstDay": "יום הייצור הנמוך ביותר",
+    "consistency": "עקביות ייצור",
+    "consistencyGood": "תפוקה עקבית מאוד",
+    "consistencyFair": "שונות בינונית",
+    "consistencyPoor": "שונות גבוהה — בדקו תקלות",
+    "lifetimeEnergy": "אנרגיה מצטברת",
+    "lastMonth": "חודש אחרון",
+    "avgActivePower": "הספק פעיל ממוצע",
+    "activeIntervals": "{active} מתוך {total} מרווחים פעילים",
+    "analyzedAt": "הניתוח נוצר ב-{date}"
   }
 }

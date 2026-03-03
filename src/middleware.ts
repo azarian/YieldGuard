@@ -6,6 +6,12 @@ import { routing } from "@/i18n/routing";
 const intlMiddleware = createIntlMiddleware(routing);
 
 export async function middleware(request: NextRequest) {
+  // Skip locale routing for API routes and auth callbacks
+  if (request.nextUrl.pathname.startsWith("/api/") ||
+      request.nextUrl.pathname.startsWith("/auth/")) {
+    return NextResponse.next();
+  }
+
   // 1. Run the intl middleware first to handle locale detection/redirect
   const intlResponse = intlMiddleware(request);
 
