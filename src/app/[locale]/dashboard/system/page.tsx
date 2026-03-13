@@ -15,6 +15,7 @@ interface SolarSystem {
   provider: string;
   created_at: string;
   last_synced_at: string | null;
+  electricity_price_per_kwh: number | null;
 }
 
 interface SyncDataRow {
@@ -48,6 +49,7 @@ export default function SystemPage() {
   const [systemName, setSystemName] = useState("");
   const [siteId, setSiteId] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [electricityPrice, setElectricityPrice] = useState("");
 
   const fetchSystem = useCallback(async () => {
     const {
@@ -66,6 +68,7 @@ export default function SystemPage() {
       setSystemName(data.system_name);
       setSiteId(data.site_id);
       setApiKey(data.api_key);
+      setElectricityPrice(data.electricity_price_per_kwh?.toString() ?? "");
 
       // Fetch sync data
       const { data: syncRows } = await supabase
@@ -107,6 +110,7 @@ export default function SystemPage() {
         site_id: siteId,
         api_key: apiKey,
         provider: "solaredge",
+        electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null,
       })
       .select()
       .single();
@@ -134,6 +138,7 @@ export default function SystemPage() {
         system_name: systemName,
         site_id: siteId,
         api_key: apiKey,
+        electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null,
       })
       .eq("id", system.id)
       .select()
@@ -172,6 +177,7 @@ export default function SystemPage() {
     setSystemName("");
     setSiteId("");
     setApiKey("");
+    setElectricityPrice("");
     setFormLoading(false);
   }
 
@@ -290,6 +296,27 @@ export default function SystemPage() {
               className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               placeholder={t("apiKeyPlaceholder")}
             />
+          </div>
+
+          {/* Electricity Price */}
+          <div>
+            <label
+              htmlFor="electricityPrice"
+              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
+              {t("electricityPrice")}
+            </label>
+            <input
+              id="electricityPrice"
+              type="number"
+              step="0.01"
+              min="0"
+              value={electricityPrice}
+              onChange={(e) => setElectricityPrice(e.target.value)}
+              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              placeholder={t("electricityPricePlaceholder")}
+            />
+            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{t("electricityPriceHint")}</p>
           </div>
 
           {/* Provider (read-only) */}
@@ -463,6 +490,25 @@ export default function SystemPage() {
                 className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               />
             </div>
+            <div>
+              <label
+                htmlFor="editElectricityPrice"
+                className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                {t("electricityPrice")}
+              </label>
+              <input
+                id="editElectricityPrice"
+                type="number"
+                step="0.01"
+                min="0"
+                value={electricityPrice}
+                onChange={(e) => setElectricityPrice(e.target.value)}
+                className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                placeholder={t("electricityPricePlaceholder")}
+              />
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{t("electricityPriceHint")}</p>
+            </div>
 
             {formError && (
               <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-400">
@@ -486,6 +532,7 @@ export default function SystemPage() {
                   setSystemName(system.system_name);
                   setSiteId(system.site_id);
                   setApiKey(system.api_key);
+                  setElectricityPrice(system.electricity_price_per_kwh?.toString() ?? "");
                 }}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
               >

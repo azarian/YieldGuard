@@ -53,23 +53,26 @@ export async function POST() {
   const endDateTimeStr = formatDateTime(endDate);
 
   try {
-    // 4. Fetch from all three SolarEdge endpoints in parallel
+    // 4. Fetch from all four SolarEdge endpoints in parallel
+    const detailsUrl = `${SOLAREDGE_BASE}/site/${siteId}/details?api_key=${apiKey}`;
     const overviewUrl = `${SOLAREDGE_BASE}/site/${siteId}/overview?api_key=${apiKey}`;
     const energyUrl = `${SOLAREDGE_BASE}/site/${siteId}/energy?timeUnit=DAY&startDate=${startDateStr}&endDate=${endDateStr}&api_key=${apiKey}`;
     const powerUrl = `${SOLAREDGE_BASE}/site/${siteId}/power?startTime=${encodeURIComponent(startDateTimeStr)}&endTime=${encodeURIComponent(endDateTimeStr)}&api_key=${apiKey}`;
 
-    const [overviewRes, energyRes, powerRes] = await Promise.all([
+    const [detailsRes, overviewRes, energyRes, powerRes] = await Promise.all([
+      fetch(detailsUrl),
       fetch(overviewUrl),
       fetch(energyUrl),
       fetch(powerUrl),
     ]);
 
     // Read all response bodies (even on error, SolarEdge returns useful info)
+    const detailsData = await detailsRes.json().catch(() => null);
     const overviewData = await overviewRes.json().catch(() => null);
     const energyData = await energyRes.json().catch(() => null);
     const powerData = await powerRes.json().catch(() => null);
 
-    // Check for API errors
+    // Check for API errors (details is best-effort, don't block on it)
     if (!overviewRes.ok || !energyRes.ok || !powerRes.ok) {
       const errors = [];
       if (!overviewRes.ok)
@@ -82,6 +85,22 @@ export async function POST() {
         { error: `SolarEdge API error — ${errors.join(" | ")}` },
         { status: 502 }
       );
+    }
+
+    // 4b. Store site details (lat/lng/kWp) if available
+    if (detailsRes.ok && detailsData?.details) {
+      const d = detailsData.details;
+      const loc = d.location ?? {};
+      await supabase
+        .from("solar_systems")
+        .update({
+          latitude: loc.latitude ?? null,
+          longitude: loc.longitude ?? null,
+          peak_power_kwp: d.peakPower ?? null,
+          azimuth: d.azimuth ?? null,
+          tilt: d.tilt ?? null,
+        })
+        .eq("id", systemId);
     }
 
     // 5. Delete old sync data for this system, then insert fresh

@@ -123,7 +123,10 @@
     "instructionStep3Title": "Step 3: Generate or copy your API Key",
     "instructionStep3Desc": "If you haven't generated an API key before, you'll need to acknowledge the SolarEdge API Terms & Conditions. After that, your API key will be displayed. Copy it and paste it in the field above.",
     "instructionStep4Title": "Step 4: Find your Site ID",
-    "instructionStep4Desc": "Your Site ID is a numeric identifier for your solar installation. You can find it in the URL bar when viewing your site on the monitoring portal — look for \"siteId=\" followed by a number (e.g. siteId=1234567). Alternatively, it's shown on the site's Dashboard page under the site name."
+    "instructionStep4Desc": "Your Site ID is a numeric identifier for your solar installation. You can find it in the URL bar when viewing your site on the monitoring portal — look for \"siteId=\" followed by a number (e.g. siteId=1234567). Alternatively, it's shown on the site's Dashboard page under the site name.",
+    "electricityPrice": "Electricity Sell Price (per kWh)",
+    "electricityPricePlaceholder": "e.g. 0.48",
+    "electricityPriceHint": "Your rate for selling solar energy back to the grid. Used to calculate monetary losses."
   },
   "analysis": {
     "title": "Energy Analysis",
@@ -151,5 +154,34 @@
     "avgActivePower": "Avg Active Power",
     "activeIntervals": "{active} of {total} intervals active",
     "analyzedAt": "Analysis generated at {date}"
+  },
+  "losses": {
+    "title": "Production Loss Analysis",
+    "runAnalysis": "Run Loss Analysis",
+    "analyzing": "Analyzing...",
+    "description": "Compare your actual production against weather-adjusted expectations to detect losses from dirt, shading, or degradation.",
+    "fetchError": "Failed to load loss analysis.",
+    "notAvailable": "Site details not available. Please sync your system first.",
+    "systemLoss": "System Loss (Dirt/Shade)",
+    "cloudLoss": "Cloud Impact",
+    "actualProduction": "Actual Production",
+    "clearSkyPotential": "Clear Sky Potential",
+    "dailyBreakdown": "Daily Breakdown",
+    "actual": "Actual",
+    "cloudLossShort": "Cloud loss",
+    "systemLossShort": "System loss",
+    "moneyLossToday": "Lost Revenue Today",
+    "moneyLoss7d": "Lost Revenue (7 Days)",
+    "moneyLossMonthly": "Monthly Projection",
+    "moneyLossYearly": "Yearly Projection",
+    "perDay": "Avg/day",
+    "projected": "Projected at current rate",
+    "noPriceSet": "Set your electricity sell price in System Settings to see monetary losses."
+  },
+  "recommendations": {
+    "title": "Recommendations",
+    "dismiss": "Dismiss",
+    "resolve": "I Fixed It",
+    "noActive": "No active recommendations."
   }
 }
