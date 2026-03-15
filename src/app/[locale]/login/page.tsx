@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { LogoFull } from "@/components/Logo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,110 +18,53 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-
     const supabase = createClient();
-
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (signInError) {
-      setError(signInError.message);
-      setLoading(false);
-      return;
-    }
-
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) { setError(signInError.message); setLoading(false); return; }
     router.push("/dashboard");
     router.refresh();
   }
 
+  const inputClass = "block w-full rounded-xl border border-border bg-background px-4 py-2.5 text-foreground shadow-sm transition-colors focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand placeholder:text-muted-light";
+
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <Link href="/" className="inline-flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
-            <svg
-              className="h-8 w-8 text-yellow-500"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"
-              />
-            </svg>
-            YieldGuard
+          <Link href="/" className="inline-block">
+            <LogoFull className="justify-center" />
           </Link>
-          <h2 className="mt-4 text-2xl font-semibold text-gray-900 dark:text-white">
-            {t("title")}
-          </h2>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {t("subtitle")}
-          </p>
+          <h2 className="mt-6 text-2xl font-bold text-foreground">{t("title")}</h2>
+          <p className="mt-2 text-sm text-muted">{t("subtitle")}</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Email */}
-          <div>
-            <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {t("email")}
-            </label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              placeholder={t("emailPlaceholder")}
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              {t("password")}
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-gray-900 shadow-sm focus:border-yellow-500 focus:outline-none focus:ring-1 focus:ring-yellow-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              placeholder={t("passwordPlaceholder")}
-            />
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-400">
-              {error}
+        <div className="rounded-2xl border border-border bg-surface p-6 shadow-sm sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-foreground">{t("email")}</label>
+              <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} placeholder={t("emailPlaceholder")} />
             </div>
-          )}
+            <div>
+              <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-foreground">{t("password")}</label>
+              <input id="password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className={inputClass} placeholder={t("passwordPlaceholder")} />
+            </div>
 
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex w-full items-center justify-center rounded-lg bg-yellow-500 px-4 py-2.5 text-base font-semibold text-white shadow-sm transition-colors hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 disabled:opacity-50"
-          >
-            {loading ? t("submitting") : t("submit")}
-          </button>
-        </form>
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{error}</div>
+            )}
 
-        <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
+            <button type="submit" disabled={loading}
+              className="flex w-full items-center justify-center rounded-xl bg-brand px-4 py-3 text-base font-semibold text-white shadow-md shadow-brand/20 transition-all hover:bg-brand-hover hover:shadow-lg disabled:opacity-50">
+              {loading ? t("submitting") : t("submit")}
+            </button>
+          </form>
+        </div>
+
+        <p className="mt-6 text-center text-sm text-muted">
           {t("noAccount")}{" "}
-          <Link href="/signup" className="font-medium text-yellow-600 hover:text-yellow-500">
-            {t("signUpLink")}
-          </Link>
+          <Link href="/signup" className="font-medium text-brand hover:text-brand-hover">{t("signUpLink")}</Link>
         </p>
       </div>
     </div>
   );
 }
-

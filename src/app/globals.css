@@ -1,26 +1,67 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #F8FAFC;
+  --foreground: #1E293B;
+  --surface: #FFFFFF;
+  --surface-hover: #F1F5F9;
+  --border: #E2E8F0;
+  --border-light: #F1F5F9;
+  --muted: #64748B;
+  --muted-light: #94A3B8;
+
+  --brand-primary: #F59E0B;
+  --brand-primary-hover: #D97706;
+  --brand-primary-light: #FEF3C7;
+  --brand-secondary: #1E293B;
+  --brand-accent: #10B981;
+  --brand-accent-hover: #059669;
+  --brand-accent-light: #D1FAE5;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-light: var(--border-light);
+  --color-muted: var(--muted);
+  --color-muted-light: var(--muted-light);
+
+  --color-brand: var(--brand-primary);
+  --color-brand-hover: var(--brand-primary-hover);
+  --color-brand-light: var(--brand-primary-light);
+  --color-brand-secondary: var(--brand-secondary);
+  --color-accent: var(--brand-accent);
+  --color-accent-hover: var(--brand-accent-hover);
+  --color-accent-light: var(--brand-accent-light);
+
+  --font-sans: var(--font-inter), "Inter", system-ui, -apple-system, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0F172A;
+    --foreground: #F1F5F9;
+    --surface: #1E293B;
+    --surface-hover: #334155;
+    --border: #334155;
+    --border-light: #1E293B;
+    --muted: #94A3B8;
+    --muted-light: #64748B;
+
+    --brand-primary-light: #78350F;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background-color: var(--brand-primary);
+  color: white;
 }
