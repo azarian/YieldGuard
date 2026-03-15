@@ -37,6 +37,9 @@
     "roleProvider": "ספק שירות",
     "submit": "הרשמה",
     "submitting": "יוצר חשבון...",
+    "googleButton": "המשך עם Google",
+    "googleLoading": "מתחבר...",
+    "or": "או",
     "hasAccount": "כבר יש לכם חשבון?",
     "logInLink": "התחברו"
   },
@@ -49,6 +52,9 @@
     "passwordPlaceholder": "••••••••",
     "submit": "התחברות",
     "submitting": "מתחבר...",
+    "googleButton": "המשך עם Google",
+    "googleLoading": "מתחבר...",
+    "or": "או",
     "noAccount": "אין לכם חשבון?",
     "signUpLink": "הירשמו"
   },

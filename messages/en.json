@@ -37,6 +37,9 @@
     "roleProvider": "Service Provider",
     "submit": "Sign Up",
     "submitting": "Creating account...",
+    "googleButton": "Continue with Google",
+    "googleLoading": "Connecting...",
+    "or": "or",
     "hasAccount": "Already have an account?",
     "logInLink": "Log in"
   },
@@ -49,6 +52,9 @@
     "passwordPlaceholder": "••••••••",
     "submit": "Log In",
     "submitting": "Logging in...",
+    "googleButton": "Continue with Google",
+    "googleLoading": "Connecting...",
+    "or": "or",
     "noAccount": "Don't have an account?",
     "signUpLink": "Sign up"
   },
