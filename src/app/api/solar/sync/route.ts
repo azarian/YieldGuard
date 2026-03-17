@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 const SOLAREDGE_BASE = "https://monitoringapi.solaredge.com";
 
@@ -13,7 +13,7 @@ function addDays(date: Date, days: number): Date {
   return d;
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const supabase = await createClient();
 
   const {
@@ -41,6 +41,18 @@ export async function POST() {
   const apiKey = system.api_key.trim();
   const systemId = system.id;
 
+  // Parse optional body parameters (date range only)
+  let dateFrom: string | null = null;
+  let dateTo: string | null = null;
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    if (body.date_from) dateFrom = body.date_from;
+    if (body.date_to) dateTo = body.date_to;
+  } catch {
+    // No body or invalid JSON — use defaults
+  }
+
   try {
     // Check for an existing running or paused job
     const { data: existingJobs } = await supabase
@@ -54,12 +66,10 @@ export async function POST() {
     if (existingJobs && existingJobs.length > 0) {
       const job = existingJobs[0];
       const updatedAt = new Date(job.updated_at ?? 0);
-      const staleMs = 30 * 60 * 1000; // 30 minutes
+      const staleMs = 30 * 60 * 1000;
       const isStale = Date.now() - updatedAt.getTime() > staleMs;
 
       if (isStale) {
-        // Job is abandoned (server crash, browser closed long ago, etc.)
-        // Mark it complete/error so we can plan a fresh job from actual DB data
         const finalStatus = job.completed_chunks > 0 ? "complete" : "error";
         await supabase
           .from("sync_jobs")
@@ -76,9 +86,7 @@ export async function POST() {
             .update({ last_synced_at: new Date().toISOString() })
             .eq("id", systemId);
         }
-        // Fall through to plan a fresh job based on actual telemetry data
       } else {
-        // Job is still fresh — resume it
         return NextResponse.json({
           job_id: job.id,
           total_chunks: job.total_chunks,
@@ -91,7 +99,7 @@ export async function POST() {
       }
     }
 
-    // Fetch site details + equipment list in parallel
+    // Fetch site details and equipment list
     const detailsUrl = `${SOLAREDGE_BASE}/site/${siteId}/details?api_key=${apiKey}`;
     const equipmentUrl = `${SOLAREDGE_BASE}/equipment/${siteId}/list?api_key=${apiKey}`;
 
@@ -129,7 +137,7 @@ export async function POST() {
         .eq("id", systemId);
     }
 
-    // Upsert equipment
+    // Upsert inverters from equipment list
     const reporters: Array<{
       serialNumber: string;
       name: string;
@@ -157,11 +165,11 @@ export async function POST() {
         .upsert(equipmentRows, { onConflict: "system_id,serial_number" });
     }
 
-    // Reload equipment from DB to get their UUIDs
     const { data: dbEquipment } = await supabase
       .from("equipment")
       .select("id, serial_number, equipment_type")
-      .eq("system_id", systemId);
+      .eq("system_id", systemId)
+      .eq("equipment_type", "inverter");
 
     if (!dbEquipment || dbEquipment.length === 0) {
       return NextResponse.json(
@@ -170,7 +178,7 @@ export async function POST() {
       );
     }
 
-    // Determine backfill date range
+    // Determine date range
     const today = new Date();
     let startFrom = new Date();
     startFrom.setFullYear(startFrom.getFullYear() - 7);
@@ -180,7 +188,22 @@ export async function POST() {
       if (instDate > startFrom) startFrom = instDate;
     }
 
-    // For each equipment, find the latest data we already have
+    if (dateFrom) {
+      const userStart = new Date(dateFrom);
+      if (!isNaN(userStart.getTime()) && userStart > startFrom) {
+        startFrom = userStart;
+      }
+    }
+
+    let endAt = today;
+    if (dateTo) {
+      const userEnd = new Date(dateTo);
+      if (!isNaN(userEnd.getTime()) && userEnd < today) {
+        endAt = userEnd;
+      }
+    }
+
+    // For each equipment, find the latest data we already have and create chunks
     const chunks: Array<{
       equipment_id: string;
       period_start: string;
@@ -190,7 +213,6 @@ export async function POST() {
     for (const equip of dbEquipment) {
       let chunkStart = new Date(startFrom);
 
-      // Check latest telemetry we have for this equipment
       const { data: latestRows } = await supabase
         .from("equipment_telemetry")
         .select("ts")
@@ -200,15 +222,16 @@ export async function POST() {
 
       if (latestRows && latestRows.length > 0) {
         const latestTs = new Date(latestRows[0].ts);
-        // Start from the day after our latest data
-        chunkStart = addDays(latestTs, -1);
+        const resumeStart = addDays(latestTs, -1);
+        if (resumeStart > chunkStart) {
+          chunkStart = resumeStart;
+        }
       }
 
-      // Split into 7-day chunks
       const chunkSize = 7;
-      while (chunkStart < today) {
+      while (chunkStart < endAt) {
         const chunkEnd = addDays(chunkStart, chunkSize);
-        const clampedEnd = chunkEnd > today ? today : chunkEnd;
+        const clampedEnd = chunkEnd > endAt ? endAt : chunkEnd;
         chunks.push({
           equipment_id: equip.id,
           period_start: formatDate(chunkStart),
@@ -218,12 +241,7 @@ export async function POST() {
       }
     }
 
-    // Also create chunks for site-level daily energy (1-year chunks)
-    // We'll use a special equipment_id convention: store them with the first inverter's ID
-    // Actually, site energy goes to site_energy_daily table, handled separately in chunk processing
-
     if (chunks.length === 0) {
-      // Already up to date
       await supabase
         .from("solar_systems")
         .update({ last_synced_at: new Date().toISOString() })
@@ -238,7 +256,6 @@ export async function POST() {
       });
     }
 
-    // Create sync job
     const { data: job, error: jobError } = await supabase
       .from("sync_jobs")
       .insert({
@@ -257,7 +274,6 @@ export async function POST() {
       );
     }
 
-    // Insert all chunks
     const chunkRows = chunks.map((c) => ({
       job_id: job.id,
       equipment_id: c.equipment_id,
@@ -266,7 +282,6 @@ export async function POST() {
       status: "pending",
     }));
 
-    // Insert in batches of 500 to avoid request size limits
     const BATCH = 500;
     for (let i = 0; i < chunkRows.length; i += BATCH) {
       const batch = chunkRows.slice(i, i + BATCH);

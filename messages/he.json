@@ -8,7 +8,8 @@
     "mySystem": "המערכת שלי",
     "logIn": "התחברות",
     "logOut": "התנתקות",
-    "signUp": "הרשמה"
+    "signUp": "הרשמה",
+    "dataSync": "סנכרון נתונים"
   },
   "home": {
     "heroTitle": "YieldGuard",
@@ -187,17 +188,24 @@
     "dismiss": "סגירה",
     "completeSummary": "{count} נקודות נתונים חדשות סונכרנו",
     "error": "הסנכרון נכשל",
-    "retry": "נסו שוב"
-  },
-  "panels": {
-    "title": "ביצועי פאנלים",
-    "description": "השוו ייצור בין פאנלים בודדים לזיהוי תת-ביצוע.",
-    "avgEnergy": "אנרגיה ממוצעת",
-    "panel": "פאנל",
-    "deviation": "סטייה",
-    "underperforming": "תת-ביצוע",
-    "normal": "תקין",
-    "aboveAvg": "מעל הממוצע",
-    "noData": "אין נתוני פאנלים זמינים. סנכרנו את המערכת תחילה."
+    "retry": "נסו שוב",
+    "pageTitle": "סנכרון נתונים",
+    "pageSubtitle": "נהלו את סנכרון הנתונים הסולאריים וצפו במלאי הציוד.",
+    "backToDashboard": "לוח בקרה",
+    "equipmentTitle": "מלאי ציוד",
+    "inverters": "ממירים",
+    "dataRange": "טווח נתונים",
+    "lastSyncedLabel": "סנכרון אחרון",
+    "neverSynced": "לא סונכרן מעולם",
+    "noData": "אין נתונים",
+    "noEquipment": "לא נמצא ציוד עדיין. התחילו סנכרון כדי לגלות את ציוד המערכת.",
+    "syncControls": "בקרת סנכרון",
+    "dateFrom": "מתאריך",
+    "dateTo": "עד תאריך",
+    "startSync": "התחל סנכרון",
+    "syncHistory": "היסטוריית סנכרון",
+    "dataSyncTitle": "סנכרון נתונים",
+    "manageSyncLink": "ניהול סנכרון",
+    "inverterLabel": "ממירים"
   }
 }

@@ -8,7 +8,8 @@
     "mySystem": "My System",
     "logIn": "Log In",
     "logOut": "Log Out",
-    "signUp": "Sign Up"
+    "signUp": "Sign Up",
+    "dataSync": "Data Sync"
   },
   "home": {
     "heroTitle": "YieldGuard",
@@ -187,17 +188,24 @@
     "dismiss": "Dismiss",
     "completeSummary": "{count} new data points synced",
     "error": "Sync Failed",
-    "retry": "Retry"
-  },
-  "panels": {
-    "title": "Panel Performance",
-    "description": "Compare production across individual panels to identify underperformers.",
-    "avgEnergy": "Avg Energy",
-    "panel": "Panel",
-    "deviation": "Deviation",
-    "underperforming": "Underperforming",
-    "normal": "Normal",
-    "aboveAvg": "Above Average",
-    "noData": "No per-panel data available. Sync your system first."
+    "retry": "Retry",
+    "pageTitle": "Data Sync",
+    "pageSubtitle": "Manage your solar data synchronization and view equipment inventory.",
+    "backToDashboard": "Dashboard",
+    "equipmentTitle": "Equipment Inventory",
+    "inverters": "Inverters",
+    "dataRange": "Data Range",
+    "lastSyncedLabel": "Last Synced",
+    "neverSynced": "Never synced",
+    "noData": "No data",
+    "noEquipment": "No equipment discovered yet. Start a sync to discover your system's equipment.",
+    "syncControls": "Sync Controls",
+    "dateFrom": "From",
+    "dateTo": "To",
+    "startSync": "Start Sync",
+    "syncHistory": "Sync History",
+    "dataSyncTitle": "Data Sync",
+    "manageSyncLink": "Manage Sync",
+    "inverterLabel": "inverters"
   }
 }

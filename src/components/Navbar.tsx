@@ -65,6 +65,7 @@ export default function Navbar() {
     ? [
         { href: "/dashboard" as const, label: t("dashboard") },
         { href: "/dashboard/system" as const, label: t("mySystem") },
+        { href: "/dashboard/sync" as const, label: t("dataSync") },
       ]
     : [];
 

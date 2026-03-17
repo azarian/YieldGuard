@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LogoIcon } from "@/components/Logo";
-import SyncPanel from "@/components/SyncPanel";
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
 
@@ -93,10 +92,12 @@ export default function DashboardPage() {
   const tp = useTranslations("panels");
   const supabase = createClient();
 
+  const ts = useTranslations("sync");
   const [authLoading, setAuthLoading] = useState(true);
   const [hasSystem, setHasSystem] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [syncStats, setSyncStats] = useState<{ inverters: number; hasData: boolean } | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [data, setData] = useState<AnalysisResult | null>(null);
@@ -123,17 +124,24 @@ export default function DashboardPage() {
       setHasSystem(!!sys);
       if (sys) setLastSyncedAt(sys.last_synced_at);
       setAuthLoading(false);
-      if (sys) { fetchAnalysis(); fetchRecs(); fetchPanels(); }
+      if (sys) { fetchAnalysis(); fetchRecs(); fetchPanels(); fetchSyncStats(); }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleSyncComplete() {
-    setLastSyncedAt(new Date().toISOString());
-    fetchAnalysis();
-    fetchRecs();
-    fetchPanels();
-  }
+  const fetchSyncStats = useCallback(async () => {
+    try {
+      const res = await fetch("/api/solar/sync/inventory");
+      const json = await res.json();
+      if (res.ok) {
+        setSyncStats({
+          inverters: json.inverter_count ?? 0,
+          hasData: !!json.date_range,
+        });
+        if (json.last_synced_at) setLastSyncedAt(json.last_synced_at);
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   const fetchAnalysis = useCallback(async () => {
     setAnalysisLoading(true); setAnalysisError(null);
@@ -243,9 +251,41 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* Sync Panel */}
-      <div className="mb-8">
-        <SyncPanel lastSyncedAt={lastSyncedAt} onSyncComplete={handleSyncComplete} />
+      {/* Sync Summary Card */}
+      <div className="mb-8 rounded-2xl border border-border bg-surface p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-light">
+              <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-foreground">{ts("dataSyncTitle")}</p>
+              <p className="text-xs text-muted">
+                {lastSyncedAt
+                  ? ts("lastSynced", { date: new Date(lastSyncedAt).toLocaleString() })
+                  : ts("neverSynced")}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {syncStats && (
+              <div className="flex gap-3 text-xs text-muted">
+                <span>{syncStats.inverters} {ts("inverterLabel")}</span>
+              </div>
+            )}
+            <Link
+              href="/dashboard/sync"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-hover"
+            >
+              {ts("manageSyncLink")}
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </Link>
+          </div>
+        </div>
       </div>
 
       {/* Recommendations */}
