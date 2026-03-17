@@ -4,7 +4,6 @@ from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import httpx
-import json
 import os
 import statistics
 from datetime import datetime, timezone, timedelta
@@ -15,7 +14,7 @@ try:
 except ImportError:
     pass
 
-app = FastAPI(title="YieldGuard Analytics", version="0.2.0")
+app = FastAPI(title="YieldGuard Analytics", version="0.3.0")
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
@@ -44,7 +43,6 @@ def _supabase_headers(token: str) -> dict:
 
 
 async def _supabase_query(token: str, table: str, params: dict | None = None) -> list:
-    """GET query to Supabase PostgREST with the caller's JWT so RLS is enforced."""
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/{table}",
@@ -60,7 +58,6 @@ async def _supabase_query(token: str, table: str, params: dict | None = None) ->
 
 
 async def _supabase_insert(token: str, table: str, rows: list[dict]) -> list:
-    """POST insert to Supabase PostgREST."""
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{SUPABASE_URL}/rest/v1/{table}",
@@ -76,7 +73,6 @@ async def _supabase_insert(token: str, table: str, rows: list[dict]) -> list:
 
 
 async def _supabase_patch(token: str, table: str, params: dict, body: dict) -> list:
-    """PATCH update to Supabase PostgREST."""
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.patch(
             f"{SUPABASE_URL}/rest/v1/{table}",
@@ -92,8 +88,23 @@ async def _supabase_patch(token: str, table: str, params: dict, body: dict) -> l
         return resp.json() if resp.status_code == 200 else []
 
 
+async def _supabase_rpc(token: str, fn_name: str, body: dict) -> list | dict:
+    """Call a Supabase RPC (database function)."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/{fn_name}",
+            headers=_supabase_headers(token),
+            json=body,
+        )
+        if resp.status_code not in (200, 201):
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Supabase RPC failed: {resp.text}",
+            )
+        return resp.json()
+
+
 async def _get_system(token: str) -> dict:
-    """Get the caller's first solar system or raise 404."""
     systems = await _supabase_query(
         token,
         "solar_systems",
@@ -108,10 +119,6 @@ async def _get_system(token: str) -> dict:
 
 
 async def _fetch_irradiance(lat: float, lng: float, start: str, end: str) -> dict[str, list]:
-    """Fetch hourly actual and clear-sky irradiance from Open-Meteo.
-
-    Returns {"time": [...], "actual": [...], "clear_sky": [...]} with W/m2 values.
-    """
     params = {
         "latitude": lat,
         "longitude": lng,
@@ -135,7 +142,6 @@ async def _fetch_irradiance(lat: float, lng: float, start: str, end: str) -> dic
 
 
 def _build_irradiance_map(irradiance: dict[str, list]) -> dict[str, tuple[float, float]]:
-    """Build a lookup from ISO hour string -> (actual_wm2, clear_sky_wm2)."""
     result: dict[str, tuple[float, float]] = {}
     times = irradiance["time"]
     actual = irradiance["actual"]
@@ -152,24 +158,86 @@ def _build_irradiance_map(irradiance: dict[str, list]) -> dict[str, tuple[float,
 
 @app.get("/api/py/health")
 async def health():
-    return {"status": "ok", "service": "yieldguard-analytics", "version": "0.2.0"}
+    return {"status": "ok", "service": "yieldguard-analytics", "version": "0.3.0"}
 
 
-# ── Energy Analysis ──────────────────────────────────────────────────────────
+# ── Main Analysis Endpoint (reads from structured DB tables) ─────────────────
 
 
-def _analyze_energy(energy_row: dict) -> dict | None:
-    values = energy_row.get("data", {}).get("energy", {}).get("values", [])
-    daily = [v for v in values if v.get("value") is not None and v["value"] > 0]
+@app.get("/api/py/analyze")
+async def analyze(request: Request):
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
 
-    if not daily:
-        return None
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=7)
 
-    energies = [v["value"] for v in daily]
-    best = max(daily, key=lambda v: v["value"])
-    worst = min(daily, key=lambda v: v["value"])
-    avg = statistics.mean(energies)
+    # Fetch daily energy from site_energy_daily
+    daily_rows = await _supabase_query(
+        token,
+        "site_energy_daily",
+        {
+            "select": "date,energy_wh",
+            "system_id": f"eq.{system_id}",
+            "date": f"gte.{start_date.isoformat()}",
+            "order": "date.asc",
+        },
+    )
+
+    # If no site_energy_daily data, try to aggregate from equipment_telemetry
+    if not daily_rows:
+        equipment_rows = await _supabase_query(
+            token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
+        )
+        if equipment_rows:
+            equip_ids = [e["id"] for e in equipment_rows]
+            # Fetch telemetry for the last 7 days
+            all_telemetry = []
+            for eid in equip_ids:
+                tele = await _supabase_query(
+                    token,
+                    "equipment_telemetry",
+                    {
+                        "select": "ts,energy_wh,power_w",
+                        "equipment_id": f"eq.{eid}",
+                        "ts": f"gte.{start_date.isoformat()}",
+                        "order": "ts.asc",
+                    },
+                )
+                all_telemetry.extend(tele)
+
+            # Aggregate into daily sums
+            daily_agg: dict[str, float] = {}
+            for t in all_telemetry:
+                d = t["ts"][:10]
+                val = t.get("energy_wh") or 0
+                if val:
+                    daily_agg[d] = daily_agg.get(d, 0) + val
+                elif t.get("power_w"):
+                    daily_agg[d] = daily_agg.get(d, 0) + (t["power_w"] * 0.25)
+
+            daily_rows = [{"date": d, "energy_wh": v} for d, v in sorted(daily_agg.items())]
+
+    if not daily_rows:
+        raise HTTPException(
+            status_code=404, detail="No synced data available. Please sync your system first."
+        )
+
+    # Analyze energy data
+    daily_values = [
+        {"date": r["date"], "kwh": round((r["energy_wh"] or 0) / 1000, 2)}
+        for r in daily_rows if r.get("energy_wh") and r["energy_wh"] > 0
+    ]
+
+    if not daily_values:
+        raise HTTPException(status_code=404, detail="No energy data found in the synced period.")
+
+    energies = [d["kwh"] for d in daily_values]
     total = sum(energies)
+    avg = statistics.mean(energies)
+    best = max(daily_values, key=lambda d: d["kwh"])
+    worst = min(daily_values, key=lambda d: d["kwh"])
 
     mid = len(energies) // 2
     first_half = statistics.mean(energies[:mid]) if mid > 0 else 0
@@ -181,131 +249,91 @@ def _analyze_energy(energy_row: dict) -> dict | None:
     if avg > 0 and len(energies) > 1:
         consistency = max(0, 100 - (statistics.stdev(energies) / avg) * 100)
 
-    return {
-        "total_kwh": round(total / 1000, 2),
-        "average_daily_kwh": round(avg / 1000, 2),
-        "best_day": {"date": best["date"], "kwh": round(best["value"] / 1000, 2)},
-        "worst_day": {"date": worst["date"], "kwh": round(worst["value"] / 1000, 2)},
-        "trend": {"direction": trend_dir, "change_pct": round(trend_pct, 1)},
-        "consistency_score": round(consistency, 1),
-        "daily_values": [
-            {"date": v["date"], "kwh": round(v["value"] / 1000, 2)} for v in daily
-        ],
-        "days_analyzed": len(daily),
-    }
-
-
-def _analyze_power(power_row: dict) -> dict | None:
-    values = power_row.get("data", {}).get("power", {}).get("values", [])
-    active = [v for v in values if v.get("value") is not None and v["value"] > 0]
-
-    if not active:
-        return None
-
-    powers = [v["value"] for v in active]
-    peak = max(active, key=lambda v: v["value"])
-
-    return {
-        "peak_kw": round(peak["value"] / 1000, 2),
-        "peak_time": peak["date"],
-        "average_active_kw": round(statistics.mean(powers) / 1000, 2),
-        "active_intervals": len(active),
-        "total_intervals": len(values),
-    }
-
-
-def _analyze_overview(overview_row: dict) -> dict | None:
-    overview = overview_row.get("data", {}).get("overview", {})
-    if not overview:
-        return None
-
-    lifetime_wh = overview.get("lifeTimeData", {}).get("energy", 0) or 0
-    last_month_wh = overview.get("lastMonthData", {}).get("energy", 0) or 0
-    last_day_wh = overview.get("lastDayData", {}).get("energy", 0) or 0
-    current_power = overview.get("currentPower", {}).get("power", 0) or 0
-
-    return {
-        "lifetime_mwh": round(lifetime_wh / 1_000_000, 2),
-        "last_month_kwh": round(last_month_wh / 1000, 1),
-        "last_day_kwh": round(last_day_wh / 1000, 1),
-        "current_power_kw": round(current_power / 1000, 2),
-        "is_producing": current_power > 0,
-    }
-
-
-# ── Main Analysis Endpoint ──────────────────────────────────────────────────
-
-
-@app.get("/api/py/analyze")
-async def analyze(request: Request):
-    token = _get_token(request)
-    system = await _get_system(token)
-
-    sync_rows = await _supabase_query(
-        token,
-        "sync_data",
-        {
-            "select": "sync_type,data,period_start,period_end,synced_at",
-            "system_id": f"eq.{system['id']}",
-            "order": "synced_at.desc",
-        },
+    # Get peak power from telemetry
+    peak_kw = 0.0
+    peak_time = ""
+    equipment_rows = await _supabase_query(
+        token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
     )
-    if not sync_rows:
-        raise HTTPException(
-            status_code=404, detail="No synced data available. Please sync your system first."
-        )
+    if equipment_rows:
+        # Sum power across all equipment per timestamp for site-level peak
+        all_power: dict[str, float] = {}
+        for eq in equipment_rows:
+            tele = await _supabase_query(
+                token,
+                "equipment_telemetry",
+                {
+                    "select": "ts,power_w",
+                    "equipment_id": f"eq.{eq['id']}",
+                    "ts": f"gte.{start_date.isoformat()}",
+                    "order": "ts.asc",
+                    "limit": "2000",
+                },
+            )
+            for t in tele:
+                if t.get("power_w") and t["power_w"] > 0:
+                    ts_key = t["ts"]
+                    all_power[ts_key] = all_power.get(ts_key, 0) + t["power_w"]
 
-    overview_row = next((r for r in sync_rows if r["sync_type"] == "overview"), None)
-    energy_row = next((r for r in sync_rows if r["sync_type"] == "energy"), None)
-    power_row = next((r for r in sync_rows if r["sync_type"] == "power"), None)
+        if all_power:
+            peak_ts = max(all_power, key=all_power.get)  # type: ignore[arg-type]
+            peak_kw = round(all_power[peak_ts] / 1000, 2)
+            peak_time = peak_ts
 
-    analysis: dict = {}
-    if energy_row:
-        energy = _analyze_energy(energy_row)
-        if energy:
-            analysis["energy"] = energy
-    if power_row:
-        power = _analyze_power(power_row)
-        if power:
-            analysis["power"] = power
-    if overview_row:
-        overview = _analyze_overview(overview_row)
-        if overview:
-            analysis["overview"] = overview
+    analysis = {
+        "energy": {
+            "total_kwh": round(total, 2),
+            "average_daily_kwh": round(avg, 2),
+            "best_day": best,
+            "worst_day": worst,
+            "trend": {"direction": trend_dir, "change_pct": round(trend_pct, 1)},
+            "consistency_score": round(consistency, 1),
+            "daily_values": daily_values,
+            "days_analyzed": len(daily_values),
+        },
+    }
+
+    if peak_kw > 0:
+        active_count = sum(1 for v in all_power.values() if v > 0)
+        total_count = len(all_power)
+        avg_active = statistics.mean([v for v in all_power.values() if v > 0]) if active_count > 0 else 0
+        analysis["power"] = {
+            "peak_kw": peak_kw,
+            "peak_time": peak_time,
+            "average_active_kw": round(avg_active / 1000, 2),
+            "active_intervals": active_count,
+            "total_intervals": total_count,
+        }
 
     return {
-        "system": system,
+        "system": {
+            "system_name": system["system_name"],
+            "site_id": system["site_id"],
+            "last_synced_at": system.get("last_synced_at"),
+        },
         "analysis": analysis,
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-# ── Loss Analysis ────────────────────────────────────────────────────────────
+# ── Loss Analysis (reads from equipment_telemetry) ───────────────────────────
 
 
 def _compute_losses(
-    power_values: list[dict],
+    power_entries: list[dict],
     irradiance_map: dict[str, tuple[float, float]],
     peak_kwp: float,
 ) -> dict:
-    """Compare actual 15-min power readings against weather-adjusted and clear-sky expectations.
-
-    SolarEdge power values are in Watts (instantaneous). Each interval is 15 min = 0.25 h.
-    Open-Meteo irradiance is hourly W/m2. Standard Test Conditions assume 1000 W/m2 = rated kWp.
-    So expected_power_w = (irradiance / 1000) * peak_kwp * 1000 * efficiency.
-    """
+    """Compare actual power readings against weather-adjusted and clear-sky expectations."""
     interval_hours = 0.25
     daily: dict[str, dict] = {}
 
-    for entry in power_values:
-        dt_str = entry.get("date", "")
-        actual_w = entry.get("value")
-        if actual_w is None:
-            actual_w = 0.0
+    for entry in power_entries:
+        ts_str = entry.get("ts", "")
+        actual_w = entry.get("power_w") or 0.0
 
-        # Parse "2026-02-28 12:15:00" -> date key + hour key
         try:
-            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             continue
 
@@ -314,11 +342,9 @@ def _compute_losses(
 
         actual_irr, clear_sky_irr = irradiance_map.get(hour_key, (0.0, 0.0))
 
-        # Expected power in watts: (irradiance / STC) * system_kWp * 1000 * efficiency
         weather_expected_w = (actual_irr / 1000.0) * peak_kwp * 1000.0 * SYSTEM_EFFICIENCY
         clear_sky_expected_w = (clear_sky_irr / 1000.0) * peak_kwp * 1000.0 * SYSTEM_EFFICIENCY
 
-        # Convert to energy (Wh) for the 15-min interval
         actual_wh = actual_w * interval_hours
         weather_expected_wh = weather_expected_w * interval_hours
         clear_sky_expected_wh = clear_sky_expected_w * interval_hours
@@ -341,7 +367,6 @@ def _compute_losses(
         d["cloud_loss_wh"] += cloud_loss_wh
         d["system_loss_wh"] += system_loss_wh
 
-    # Build per-day list and totals
     total_actual = 0.0
     total_weather_exp = 0.0
     total_clear_sky = 0.0
@@ -365,12 +390,8 @@ def _compute_losses(
             "system_loss_kwh": round(d["system_loss_wh"] / 1000, 2),
         })
 
-    system_loss_pct = (
-        (total_system_loss / total_weather_exp * 100) if total_weather_exp > 0 else 0
-    )
-    cloud_loss_pct = (
-        (total_cloud_loss / total_clear_sky * 100) if total_clear_sky > 0 else 0
-    )
+    system_loss_pct = (total_system_loss / total_weather_exp * 100) if total_weather_exp > 0 else 0
+    cloud_loss_pct = (total_cloud_loss / total_clear_sky * 100) if total_clear_sky > 0 else 0
 
     return {
         "totals": {
@@ -389,10 +410,7 @@ def _compute_losses(
 # ── Recommendation Generation ────────────────────────────────────────────────
 
 
-def _generate_recommendations(
-    system_id: str, losses: dict
-) -> list[dict]:
-    """Produce recommendation dicts based on loss analysis thresholds."""
+def _generate_recommendations(system_id: str, losses: dict) -> list[dict]:
     recs: list[dict] = []
     totals = losses["totals"]
     sys_loss_pct = totals["system_loss_pct"]
@@ -406,12 +424,9 @@ def _generate_recommendations(
             "message": (
                 f"Your system is producing {sys_loss_pct:.1f}% less than expected after accounting "
                 f"for weather. This suggests dirty panels or a shading issue. "
-                f"Estimated loss: {totals['system_loss_kwh']} kWh over the last 7 days."
+                f"Estimated loss: {totals['system_loss_kwh']} kWh over the analyzed period."
             ),
-            "metadata": {
-                "system_loss_pct": sys_loss_pct,
-                "system_loss_kwh": totals["system_loss_kwh"],
-            },
+            "metadata": {"system_loss_pct": sys_loss_pct, "system_loss_kwh": totals["system_loss_kwh"]},
             "status": "active",
             "analysis_context": {"period_totals": totals},
         })
@@ -424,17 +439,13 @@ def _generate_recommendations(
             "message": (
                 f"Your system is producing {sys_loss_pct:.1f}% less than expected. "
                 f"Consider scheduling a panel cleaning. "
-                f"Estimated loss: {totals['system_loss_kwh']} kWh over the last 7 days."
+                f"Estimated loss: {totals['system_loss_kwh']} kWh over the analyzed period."
             ),
-            "metadata": {
-                "system_loss_pct": sys_loss_pct,
-                "system_loss_kwh": totals["system_loss_kwh"],
-            },
+            "metadata": {"system_loss_pct": sys_loss_pct, "system_loss_kwh": totals["system_loss_kwh"]},
             "status": "active",
             "analysis_context": {"period_totals": totals},
         })
 
-    # Check for time-of-day shading pattern
     daily = losses["daily"]
     if len(daily) >= 3:
         loss_ratios = [
@@ -445,7 +456,6 @@ def _generate_recommendations(
         if len(loss_ratios) > 1:
             avg_ratio = statistics.mean(loss_ratios)
             std_ratio = statistics.stdev(loss_ratios)
-            # High avg loss but low variance = consistent issue, possibly shade
             if avg_ratio > 0.10 and std_ratio < 0.05:
                 recs.append({
                     "system_id": system_id,
@@ -457,15 +467,11 @@ def _generate_recommendations(
                         "a shading issue (e.g., a tree or structure blocking sunlight). "
                         "Check for obstructions near your panels."
                     ),
-                    "metadata": {
-                        "avg_loss_ratio": round(avg_ratio, 3),
-                        "loss_std_dev": round(std_ratio, 3),
-                    },
+                    "metadata": {"avg_loss_ratio": round(avg_ratio, 3), "loss_std_dev": round(std_ratio, 3)},
                     "status": "active",
                     "analysis_context": {"period_totals": totals},
                 })
 
-    # Degradation trend: compare first half vs second half of period
     if len(daily) >= 4:
         mid = len(daily) // 2
         first_losses = [d["system_loss_kwh"] for d in daily[:mid]]
@@ -494,7 +500,6 @@ def _generate_recommendations(
 
 
 def _compute_monetary(losses: dict, price_per_kwh: float | None) -> dict | None:
-    """Compute monetary losses if the user has set an electricity price."""
     if not price_per_kwh or price_per_kwh <= 0:
         return None
 
@@ -503,18 +508,10 @@ def _compute_monetary(losses: dict, price_per_kwh: float | None) -> dict | None:
     days_count = len(daily)
 
     loss_7d = totals["system_loss_kwh"] * price_per_kwh
-
-    # Today = last day in the list (or 0)
     loss_today = (daily[-1]["system_loss_kwh"] * price_per_kwh) if daily else 0
-
-    # Average daily loss
     avg_daily_loss_kwh = totals["system_loss_kwh"] / days_count if days_count > 0 else 0
     avg_daily_loss_money = avg_daily_loss_kwh * price_per_kwh
-
-    # Monthly projection (30 days at current average rate)
     loss_monthly_projected = avg_daily_loss_money * 30
-
-    # Yearly projection
     loss_yearly_projected = avg_daily_loss_money * 365
 
     return {
@@ -531,6 +528,7 @@ def _compute_monetary(losses: dict, price_per_kwh: float | None) -> dict | None:
 async def analyze_losses(request: Request):
     token = _get_token(request)
     system = await _get_system(token)
+    system_id = system["id"]
 
     lat = system.get("latitude")
     lng = system.get("longitude")
@@ -539,42 +537,49 @@ async def analyze_losses(request: Request):
     if not lat or not lng or not kwp:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Site details (latitude, longitude, peak power) are not available. "
-                "Please sync your system first to fetch site details from SolarEdge."
-            ),
+            detail="Site details (latitude, longitude, peak power) are not available. Please sync your system first.",
         )
 
-    # Get synced power data
-    sync_rows = await _supabase_query(
-        token,
-        "sync_data",
-        {
-            "select": "sync_type,data,period_start,period_end",
-            "system_id": f"eq.{system['id']}",
-            "sync_type": "eq.power",
-        },
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=7)
+
+    # Get all equipment for this system
+    equipment = await _supabase_query(
+        token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
     )
-    if not sync_rows:
-        raise HTTPException(status_code=404, detail="No power data available. Please sync first.")
 
-    power_row = sync_rows[0]
-    power_values = power_row.get("data", {}).get("power", {}).get("values", [])
-    if not power_values:
-        raise HTTPException(status_code=404, detail="Power data is empty.")
+    if not equipment:
+        raise HTTPException(status_code=404, detail="No equipment found. Please sync first.")
 
-    start_date = power_row.get("period_start", "")
-    end_date = power_row.get("period_end", "")
+    # Aggregate site-level power per timestamp from telemetry
+    site_power: dict[str, float] = {}
+    for eq in equipment:
+        tele = await _supabase_query(
+            token,
+            "equipment_telemetry",
+            {
+                "select": "ts,power_w",
+                "equipment_id": f"eq.{eq['id']}",
+                "ts": f"gte.{start_date.isoformat()}",
+                "order": "ts.asc",
+            },
+        )
+        for t in tele:
+            pw = t.get("power_w") or 0.0
+            site_power[t["ts"]] = site_power.get(t["ts"], 0) + pw
 
-    # Fetch irradiance from Open-Meteo
-    irradiance = await _fetch_irradiance(lat, lng, start_date, end_date)
+    if not site_power:
+        raise HTTPException(status_code=404, detail="No telemetry data available for loss analysis.")
+
+    power_entries = [{"ts": ts, "power_w": pw} for ts, pw in sorted(site_power.items())]
+
+    # Fetch irradiance
+    irradiance = await _fetch_irradiance(lat, lng, start_date.isoformat(), end_date.isoformat())
     irradiance_map = _build_irradiance_map(irradiance)
 
-    # Compute losses
-    losses = _compute_losses(power_values, irradiance_map, kwp)
+    losses = _compute_losses(power_entries, irradiance_map, kwp)
 
-    # Generate recommendations and store them
-    recs = _generate_recommendations(system["id"], losses)
+    recs = _generate_recommendations(system_id, losses)
     stored_recs = []
     if recs:
         stored_recs = await _supabase_insert(token, "recommendations", recs)
@@ -590,6 +595,101 @@ async def analyze_losses(request: Request):
         "losses": losses,
         "monetary": _compute_monetary(losses, system.get("electricity_price_per_kwh")),
         "recommendations_created": len(stored_recs),
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── Per-Panel Analysis ───────────────────────────────────────────────────────
+
+
+@app.get("/api/py/analyze/panels")
+async def analyze_panels(request: Request):
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
+
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=7)
+
+    # Get all optimizers
+    equipment = await _supabase_query(
+        token,
+        "equipment",
+        {
+            "select": "id,serial_number,name,equipment_type",
+            "system_id": f"eq.{system_id}",
+            "equipment_type": "eq.optimizer",
+        },
+    )
+
+    if not equipment:
+        return {"panels": [], "message": "No optimizer data available"}
+
+    panel_stats: list[dict] = []
+    energy_values: list[float] = []
+
+    for eq in equipment:
+        tele = await _supabase_query(
+            token,
+            "equipment_telemetry",
+            {
+                "select": "ts,power_w,energy_wh",
+                "equipment_id": f"eq.{eq['id']}",
+                "ts": f"gte.{start_date.isoformat()}",
+                "order": "ts.asc",
+            },
+        )
+
+        if not tele:
+            continue
+
+        total_energy_wh = 0.0
+        total_power = 0.0
+        count = 0
+        for t in tele:
+            e = t.get("energy_wh") or 0.0
+            p = t.get("power_w") or 0.0
+            if e > 0:
+                total_energy_wh += e
+            elif p > 0:
+                total_energy_wh += p * 0.25
+            if p > 0:
+                total_power += p
+                count += 1
+
+        total_energy_kwh = total_energy_wh / 1000.0
+        avg_power = total_power / count if count > 0 else 0
+
+        panel_stats.append({
+            "serial_number": eq["serial_number"],
+            "name": eq.get("name"),
+            "total_energy_kwh": round(total_energy_kwh, 2),
+            "avg_power_w": round(avg_power, 1),
+        })
+        energy_values.append(total_energy_kwh)
+
+    if not panel_stats:
+        return {"panels": [], "message": "No telemetry data available"}
+
+    avg_energy = statistics.mean(energy_values) if energy_values else 0
+
+    panels = []
+    for ps in panel_stats:
+        deviation = ((ps["total_energy_kwh"] - avg_energy) / avg_energy * 100) if avg_energy > 0 else 0
+        status = "underperforming" if deviation < -10 else ("above_average" if deviation > 10 else "normal")
+        panels.append({
+            **ps,
+            "deviation_pct": round(deviation, 1),
+            "status": status,
+        })
+
+    panels.sort(key=lambda p: p["deviation_pct"])
+
+    return {
+        "panels": panels,
+        "avg_energy_kwh": round(avg_energy, 2),
+        "panel_count": len(panels),
+        "underperforming_count": sum(1 for p in panels if p["status"] == "underperforming"),
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -171,5 +171,33 @@
     "dismiss": "דחייה",
     "resolve": "תיקנתי את זה",
     "noActive": "אין המלצות פעילות."
+  },
+  "sync": {
+    "syncNow": "סנכרון נתונים",
+    "lastSynced": "סנכרון אחרון: {date}",
+    "discovering": "מגלה ציוד ומתכנן סנכרון...",
+    "syncing": "מסנכרן נתונים היסטוריים...",
+    "rateLimited": "מוגבל קצב — מושהה...",
+    "cancel": "ביטול",
+    "chunks": "חלקים",
+    "dataPoints": "נקודות נתונים",
+    "currentItem": "מסנכרן {equipment} ({period})",
+    "resumingIn": "ממשיך בעוד {seconds} שניות...",
+    "complete": "הסנכרון הושלם!",
+    "dismiss": "סגירה",
+    "completeSummary": "{count} נקודות נתונים חדשות סונכרנו",
+    "error": "הסנכרון נכשל",
+    "retry": "נסו שוב"
+  },
+  "panels": {
+    "title": "ביצועי פאנלים",
+    "description": "השוו ייצור בין פאנלים בודדים לזיהוי תת-ביצוע.",
+    "avgEnergy": "אנרגיה ממוצעת",
+    "panel": "פאנל",
+    "deviation": "סטייה",
+    "underperforming": "תת-ביצוע",
+    "normal": "תקין",
+    "aboveAvg": "מעל הממוצע",
+    "noData": "אין נתוני פאנלים זמינים. סנכרנו את המערכת תחילה."
   }
 }

@@ -171,5 +171,33 @@
     "dismiss": "Dismiss",
     "resolve": "I Fixed It",
     "noActive": "No active recommendations."
+  },
+  "sync": {
+    "syncNow": "Sync Data",
+    "lastSynced": "Last synced: {date}",
+    "discovering": "Discovering equipment and planning sync...",
+    "syncing": "Syncing historical data...",
+    "rateLimited": "Rate limited — pausing...",
+    "cancel": "Cancel",
+    "chunks": "chunks",
+    "dataPoints": "data points",
+    "currentItem": "Syncing {equipment} ({period})",
+    "resumingIn": "Resuming in {seconds}s...",
+    "complete": "Sync Complete!",
+    "dismiss": "Dismiss",
+    "completeSummary": "{count} new data points synced",
+    "error": "Sync Failed",
+    "retry": "Retry"
+  },
+  "panels": {
+    "title": "Panel Performance",
+    "description": "Compare production across individual panels to identify underperformers.",
+    "avgEnergy": "Avg Energy",
+    "panel": "Panel",
+    "deviation": "Deviation",
+    "underperforming": "Underperforming",
+    "normal": "Normal",
+    "aboveAvg": "Above Average",
+    "noData": "No per-panel data available. Sync your system first."
   }
 }

@@ -4,18 +4,18 @@ import { NextResponse } from "next/server";
 const SOLAREDGE_BASE = "https://monitoringapi.solaredge.com";
 
 function formatDate(date: Date): string {
-  return date.toISOString().split("T")[0]; // YYYY-MM-DD
+  return date.toISOString().split("T")[0];
 }
 
-function formatDateTime(date: Date): string {
-  // SolarEdge expects: YYYY-MM-DD HH:MM:SS
-  return date.toISOString().replace("T", " ").substring(0, 19);
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
 export async function POST() {
   const supabase = await createClient();
 
-  // 1. Authenticate user
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -24,7 +24,6 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2. Get the user's solar system
   const { data: system, error: systemError } = await supabase
     .from("solar_systems")
     .select("*")
@@ -42,55 +41,81 @@ export async function POST() {
   const apiKey = system.api_key.trim();
   const systemId = system.id;
 
-  // 3. Calculate date range (last 7 days)
-  const endDate = new Date();
-  const startDate = new Date();
-  startDate.setDate(endDate.getDate() - 7);
-
-  const startDateStr = formatDate(startDate);
-  const endDateStr = formatDate(endDate);
-  const startDateTimeStr = formatDateTime(startDate);
-  const endDateTimeStr = formatDateTime(endDate);
-
   try {
-    // 4. Fetch from all four SolarEdge endpoints in parallel
-    const detailsUrl = `${SOLAREDGE_BASE}/site/${siteId}/details?api_key=${apiKey}`;
-    const overviewUrl = `${SOLAREDGE_BASE}/site/${siteId}/overview?api_key=${apiKey}`;
-    const energyUrl = `${SOLAREDGE_BASE}/site/${siteId}/energy?timeUnit=DAY&startDate=${startDateStr}&endDate=${endDateStr}&api_key=${apiKey}`;
-    const powerUrl = `${SOLAREDGE_BASE}/site/${siteId}/power?startTime=${encodeURIComponent(startDateTimeStr)}&endTime=${encodeURIComponent(endDateTimeStr)}&api_key=${apiKey}`;
+    // Check for an existing running or paused job
+    const { data: existingJobs } = await supabase
+      .from("sync_jobs")
+      .select("id, status, total_chunks, completed_chunks, current_equipment, current_period, updated_at")
+      .eq("system_id", systemId)
+      .in("status", ["running", "paused"])
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-    const [detailsRes, overviewRes, energyRes, powerRes] = await Promise.all([
+    if (existingJobs && existingJobs.length > 0) {
+      const job = existingJobs[0];
+      const updatedAt = new Date(job.updated_at ?? 0);
+      const staleMs = 30 * 60 * 1000; // 30 minutes
+      const isStale = Date.now() - updatedAt.getTime() > staleMs;
+
+      if (isStale) {
+        // Job is abandoned (server crash, browser closed long ago, etc.)
+        // Mark it complete/error so we can plan a fresh job from actual DB data
+        const finalStatus = job.completed_chunks > 0 ? "complete" : "error";
+        await supabase
+          .from("sync_jobs")
+          .update({
+            status: finalStatus,
+            error_message: finalStatus === "error" ? "Abandoned (stale)" : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id);
+
+        if (finalStatus === "complete") {
+          await supabase
+            .from("solar_systems")
+            .update({ last_synced_at: new Date().toISOString() })
+            .eq("id", systemId);
+        }
+        // Fall through to plan a fresh job based on actual telemetry data
+      } else {
+        // Job is still fresh — resume it
+        return NextResponse.json({
+          job_id: job.id,
+          total_chunks: job.total_chunks,
+          completed_chunks: job.completed_chunks,
+          status: job.status,
+          current_equipment: job.current_equipment,
+          current_period: job.current_period,
+          resumed: true,
+        });
+      }
+    }
+
+    // Fetch site details + equipment list in parallel
+    const detailsUrl = `${SOLAREDGE_BASE}/site/${siteId}/details?api_key=${apiKey}`;
+    const equipmentUrl = `${SOLAREDGE_BASE}/equipment/${siteId}/list?api_key=${apiKey}`;
+
+    const [detailsRes, equipmentRes] = await Promise.all([
       fetch(detailsUrl),
-      fetch(overviewUrl),
-      fetch(energyUrl),
-      fetch(powerUrl),
+      fetch(equipmentUrl),
     ]);
 
-    // Read all response bodies (even on error, SolarEdge returns useful info)
     const detailsData = await detailsRes.json().catch(() => null);
-    const overviewData = await overviewRes.json().catch(() => null);
-    const energyData = await energyRes.json().catch(() => null);
-    const powerData = await powerRes.json().catch(() => null);
+    const equipmentData = await equipmentRes.json().catch(() => null);
 
-    // Check for API errors (details is best-effort, don't block on it)
-    if (!overviewRes.ok || !energyRes.ok || !powerRes.ok) {
-      const errors = [];
-      if (!overviewRes.ok)
-        errors.push(`Overview ${overviewRes.status}: ${JSON.stringify(overviewData)}`);
-      if (!energyRes.ok)
-        errors.push(`Energy ${energyRes.status}: ${JSON.stringify(energyData)}`);
-      if (!powerRes.ok)
-        errors.push(`Power ${powerRes.status}: ${JSON.stringify(powerData)}`);
+    if (!equipmentRes.ok || !equipmentData) {
       return NextResponse.json(
-        { error: `SolarEdge API error — ${errors.join(" | ")}` },
+        { error: `Failed to fetch equipment list: ${equipmentRes.status}` },
         { status: 502 }
       );
     }
 
-    // 4b. Store site details (lat/lng/kWp) if available
+    // Update site details
+    let installationDate: string | null = null;
     if (detailsRes.ok && detailsData?.details) {
       const d = detailsData.details;
       const loc = d.location ?? {};
+      installationDate = d.installationDate ?? null;
       await supabase
         .from("solar_systems")
         .update({
@@ -99,69 +124,175 @@ export async function POST() {
           peak_power_kwp: d.peakPower ?? null,
           azimuth: d.azimuth ?? null,
           tilt: d.tilt ?? null,
+          installation_date: installationDate,
         })
         .eq("id", systemId);
     }
 
-    // 5. Delete old sync data for this system, then insert fresh
-    await supabase
-      .from("sync_data")
-      .delete()
+    // Upsert equipment
+    const reporters: Array<{
+      serialNumber: string;
+      name: string;
+      manufacturer: string;
+      model: string;
+      type: string;
+      connectedTo?: string;
+    }> = equipmentData.reporters?.list ?? [];
+
+    const equipmentRows = reporters.map((r) => ({
+      system_id: systemId,
+      serial_number: r.serialNumber,
+      equipment_type: r.type?.toLowerCase().includes("optimizer")
+        ? "optimizer"
+        : "inverter",
+      name: r.name || null,
+      manufacturer: r.manufacturer || null,
+      model: r.model || null,
+      connected_to: r.connectedTo || null,
+    }));
+
+    if (equipmentRows.length > 0) {
+      await supabase
+        .from("equipment")
+        .upsert(equipmentRows, { onConflict: "system_id,serial_number" });
+    }
+
+    // Reload equipment from DB to get their UUIDs
+    const { data: dbEquipment } = await supabase
+      .from("equipment")
+      .select("id, serial_number, equipment_type")
       .eq("system_id", systemId);
 
-    // Insert all three data types
-    const { error: insertError } = await supabase.from("sync_data").insert([
-      {
-        system_id: systemId,
-        sync_type: "overview",
-        data: overviewData,
-        period_start: startDateStr,
-        period_end: endDateStr,
-      },
-      {
-        system_id: systemId,
-        sync_type: "energy",
-        data: energyData,
-        period_start: startDateStr,
-        period_end: endDateStr,
-      },
-      {
-        system_id: systemId,
-        sync_type: "power",
-        data: powerData,
-        period_start: startDateStr,
-        period_end: endDateStr,
-      },
-    ]);
-
-    if (insertError) {
+    if (!dbEquipment || dbEquipment.length === 0) {
       return NextResponse.json(
-        { error: `Failed to store sync data: ${insertError.message}` },
+        { error: "No equipment found for this site" },
+        { status: 404 }
+      );
+    }
+
+    // Determine backfill date range
+    const today = new Date();
+    let startFrom = new Date();
+    startFrom.setFullYear(startFrom.getFullYear() - 7);
+
+    if (installationDate) {
+      const instDate = new Date(installationDate);
+      if (instDate > startFrom) startFrom = instDate;
+    }
+
+    // For each equipment, find the latest data we already have
+    const chunks: Array<{
+      equipment_id: string;
+      period_start: string;
+      period_end: string;
+    }> = [];
+
+    for (const equip of dbEquipment) {
+      let chunkStart = new Date(startFrom);
+
+      // Check latest telemetry we have for this equipment
+      const { data: latestRows } = await supabase
+        .from("equipment_telemetry")
+        .select("ts")
+        .eq("equipment_id", equip.id)
+        .order("ts", { ascending: false })
+        .limit(1);
+
+      if (latestRows && latestRows.length > 0) {
+        const latestTs = new Date(latestRows[0].ts);
+        // Start from the day after our latest data
+        chunkStart = addDays(latestTs, -1);
+      }
+
+      // Split into 7-day chunks
+      const chunkSize = 7;
+      while (chunkStart < today) {
+        const chunkEnd = addDays(chunkStart, chunkSize);
+        const clampedEnd = chunkEnd > today ? today : chunkEnd;
+        chunks.push({
+          equipment_id: equip.id,
+          period_start: formatDate(chunkStart),
+          period_end: formatDate(clampedEnd),
+        });
+        chunkStart = clampedEnd;
+      }
+    }
+
+    // Also create chunks for site-level daily energy (1-year chunks)
+    // We'll use a special equipment_id convention: store them with the first inverter's ID
+    // Actually, site energy goes to site_energy_daily table, handled separately in chunk processing
+
+    if (chunks.length === 0) {
+      // Already up to date
+      await supabase
+        .from("solar_systems")
+        .update({ last_synced_at: new Date().toISOString() })
+        .eq("id", systemId);
+
+      return NextResponse.json({
+        job_id: null,
+        total_chunks: 0,
+        completed_chunks: 0,
+        status: "complete",
+        message: "Already up to date",
+      });
+    }
+
+    // Create sync job
+    const { data: job, error: jobError } = await supabase
+      .from("sync_jobs")
+      .insert({
+        system_id: systemId,
+        status: "running",
+        total_chunks: chunks.length,
+        completed_chunks: 0,
+      })
+      .select()
+      .single();
+
+    if (jobError || !job) {
+      return NextResponse.json(
+        { error: `Failed to create sync job: ${jobError?.message}` },
         { status: 500 }
       );
     }
 
-    // 6. Update last_synced_at on the system
-    await supabase
-      .from("solar_systems")
-      .update({ last_synced_at: new Date().toISOString() })
-      .eq("id", systemId);
+    // Insert all chunks
+    const chunkRows = chunks.map((c) => ({
+      job_id: job.id,
+      equipment_id: c.equipment_id,
+      period_start: c.period_start,
+      period_end: c.period_end,
+      status: "pending",
+    }));
 
-    // 7. Return the fetched data
+    // Insert in batches of 500 to avoid request size limits
+    const BATCH = 500;
+    for (let i = 0; i < chunkRows.length; i += BATCH) {
+      const batch = chunkRows.slice(i, i + BATCH);
+      const { error: chunkError } = await supabase
+        .from("sync_chunks")
+        .insert(batch);
+      if (chunkError) {
+        return NextResponse.json(
+          { error: `Failed to create sync chunks: ${chunkError.message}` },
+          { status: 500 }
+        );
+      }
+    }
+
     return NextResponse.json({
-      success: true,
-      data: {
-        overview: overviewData,
-        energy: energyData,
-        power: powerData,
-      },
+      job_id: job.id,
+      total_chunks: chunks.length,
+      completed_chunks: 0,
+      status: "running",
+      equipment_count: dbEquipment.length,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: `Failed to sync: ${message}` },
+      { error: `Failed to start sync: ${message}` },
       { status: 500 }
     );
   }
 }
-

@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LogoIcon } from "@/components/Logo";
+import SyncPanel from "@/components/SyncPanel";
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
 
@@ -32,6 +33,15 @@ interface LossResult {
   monetary: MonetaryLoss | null; recommendations_created: number;
 }
 interface Recommendation { id: string; type: string; severity: "info" | "warning" | "critical"; title: string; message: string; status: string; created_at: string }
+
+interface PanelData {
+  serial_number: string;
+  name: string | null;
+  total_energy_kwh: number;
+  avg_power_w: number;
+  deviation_pct: number;
+  status: "underperforming" | "normal" | "above_average";
+}
 
 /* ── Small components ────────────────────────────────────────────────────── */
 
@@ -80,13 +90,13 @@ export default function DashboardPage() {
   const ta = useTranslations("analysis");
   const tl = useTranslations("losses");
   const tr = useTranslations("recommendations");
+  const tp = useTranslations("panels");
   const supabase = createClient();
 
   const [authLoading, setAuthLoading] = useState(true);
   const [hasSystem, setHasSystem] = useState(false);
   const [displayName, setDisplayName] = useState("");
-  const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [data, setData] = useState<AnalysisResult | null>(null);
@@ -95,6 +105,8 @@ export default function DashboardPage() {
   const [lossData, setLossData] = useState<LossResult | null>(null);
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [updatingRec, setUpdatingRec] = useState<string | null>(null);
+  const [panelData, setPanelData] = useState<PanelData[] | null>(null);
+  const [panelLoading, setPanelLoading] = useState(false);
 
   const getToken = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -107,27 +119,20 @@ export default function DashboardPage() {
       if (!user) { setAuthLoading(false); return; }
       const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
       setDisplayName(profile?.full_name ?? user.email ?? "");
-      const { data: sys } = await supabase.from("solar_systems").select("id").eq("user_id", user.id).single();
+      const { data: sys } = await supabase.from("solar_systems").select("id, last_synced_at").eq("user_id", user.id).single();
       setHasSystem(!!sys);
+      if (sys) setLastSyncedAt(sys.last_synced_at);
       setAuthLoading(false);
-      if (sys) { fetchAnalysis(); fetchRecs(); }
+      if (sys) { fetchAnalysis(); fetchRecs(); fetchPanels(); }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleSync() {
-    setSyncing(true); setSyncMessage(null);
-    try {
-      const res = await fetch("/api/solar/sync", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) { setSyncMessage({ type: "error", text: json.error || t("syncError") }); setSyncing(false); return; }
-      setSyncMessage({ type: "success", text: t("syncSuccess") });
-      fetchAnalysis();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Network error";
-      setSyncMessage({ type: "error", text: `${t("syncError")} (${msg})` });
-    }
-    setSyncing(false);
+  function handleSyncComplete() {
+    setLastSyncedAt(new Date().toISOString());
+    fetchAnalysis();
+    fetchRecs();
+    fetchPanels();
   }
 
   const fetchAnalysis = useCallback(async () => {
@@ -160,6 +165,18 @@ export default function DashboardPage() {
   const fetchRecs = useCallback(async () => {
     const token = await getToken(); if (!token) return;
     try { const res = await fetch("/api/py/recommendations", { headers: { Authorization: `Bearer ${token}` } }); const json = await res.json(); if (res.ok) setRecs(json.recommendations ?? []); } catch { /* ignore */ }
+  }, [getToken]);
+
+  const fetchPanels = useCallback(async () => {
+    setPanelLoading(true);
+    const token = await getToken();
+    if (!token) { setPanelLoading(false); return; }
+    try {
+      const res = await fetch("/api/py/analyze/panels", { headers: { Authorization: `Bearer ${token}` } });
+      const json = await res.json();
+      if (res.ok && json.panels) setPanelData(json.panels);
+    } catch { /* ignore */ }
+    setPanelLoading(false);
   }, [getToken]);
 
   async function updateRec(id: string, status: "dismissed" | "resolved") {
@@ -217,31 +234,19 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold text-foreground">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted">{t("welcomeBack", { name: displayName })}</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={fetchAnalysis} disabled={analysisLoading}
-            className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-50">
-            <svg className="me-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-            </svg>
-            {ta("refresh")}
-          </button>
-          <button onClick={handleSync} disabled={syncing}
-            className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
-            {syncing ? t("syncing") : t("syncNow")}
-          </button>
-        </div>
+        <button onClick={fetchAnalysis} disabled={analysisLoading}
+          className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-50">
+          <svg className="me-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+          </svg>
+          {ta("refresh")}
+        </button>
       </div>
 
-      {/* Sync message */}
-      {syncMessage && (
-        <div className={`mb-6 rounded-xl p-3.5 text-sm font-medium ${
-          syncMessage.type === "success"
-            ? "border border-accent/20 bg-accent-light/50 text-accent dark:bg-green-900/20"
-            : "border border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
-        }`}>
-          {syncMessage.text}
-        </div>
-      )}
+      {/* Sync Panel */}
+      <div className="mb-8">
+        <SyncPanel lastSyncedAt={lastSyncedAt} onSyncComplete={handleSyncComplete} />
+      </div>
 
       {/* Recommendations */}
       {recs.length > 0 && (
@@ -439,6 +444,59 @@ export default function DashboardPage() {
             </>
           );
         })()}
+      </div>
+
+      {/* ── Panel Performance Section ─────────────────────────── */}
+      <div className="mb-8 rounded-2xl border border-border bg-surface p-6">
+        <h2 className="mb-2 text-lg font-semibold text-foreground">{tp("title")}</h2>
+        <p className="mb-4 text-sm text-muted">{tp("description")}</p>
+
+        {panelLoading && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-20 animate-pulse rounded-xl bg-border-light" />
+            ))}
+          </div>
+        )}
+
+        {!panelLoading && panelData && panelData.length > 0 && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {panelData.map((panel) => {
+              const statusColors = {
+                underperforming: "border-red-200 bg-red-50/50 dark:border-red-800 dark:bg-red-900/10",
+                normal: "border-border bg-surface",
+                above_average: "border-accent/20 bg-accent-light/20 dark:border-green-800 dark:bg-green-900/10",
+              };
+              const deviationColor = panel.deviation_pct < -10 ? "text-red-600" : panel.deviation_pct > 10 ? "text-accent" : "text-muted";
+              const statusLabel = panel.status === "underperforming" ? tp("underperforming") : panel.status === "above_average" ? tp("aboveAvg") : tp("normal");
+
+              return (
+                <div key={panel.serial_number} className={`rounded-xl border p-4 ${statusColors[panel.status]}`}>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-foreground">{panel.name || panel.serial_number}</p>
+                    <span className={`text-xs font-semibold ${deviationColor}`}>
+                      {panel.deviation_pct > 0 ? "+" : ""}{panel.deviation_pct.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-xs text-muted">{panel.total_energy_kwh.toFixed(1)} kWh</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      panel.status === "underperforming" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                        : panel.status === "above_average" ? "bg-accent-light text-accent dark:bg-green-900/30 dark:text-green-400"
+                        : "bg-surface-hover text-muted"
+                    }`}>
+                      {statusLabel}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!panelLoading && (!panelData || panelData.length === 0) && (
+          <p className="text-sm text-muted-light">{tp("noData")}</p>
+        )}
       </div>
 
       {/* Insight Cards */}
