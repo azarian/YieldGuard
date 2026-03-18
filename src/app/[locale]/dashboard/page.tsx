@@ -26,7 +26,7 @@ interface AnalysisResult {
 }
 
 interface LossDay { date: string; actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number }
-interface MonetaryLoss { currency_per_kwh: number; loss_today: number; loss_7d: number; loss_monthly_projected: number; loss_yearly_projected: number; avg_daily_loss: number }
+interface MonetaryLoss { currency_per_kwh: number; currency: string; currency_symbol: string; loss_today: number; loss_7d: number; loss_monthly_projected: number; loss_yearly_projected: number; avg_daily_loss: number }
 interface LossResult {
   losses: { totals: { actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number; system_loss_pct: number; cloud_loss_pct: number }; daily: LossDay[] };
   monetary: MonetaryLoss | null; recommendations_created: number;
@@ -426,29 +426,32 @@ export default function DashboardPage() {
                 <MetricCard label={tl("clearSkyPotential")} value={`${totals.clear_sky_expected_kwh} kWh`} />
               </div>
 
-              {lossData.monetary && (
-                <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-                    <p className="text-xs text-muted">{tl("moneyLossToday")}</p>
-                    <p className="mt-1 text-xl font-bold text-red-600">{lossData.monetary.loss_today.toFixed(2)}</p>
-                    <p className="text-xs text-muted-light">{tl("perDay")}: {lossData.monetary.avg_daily_loss.toFixed(2)}</p>
+              {lossData.monetary && (() => {
+                const sym = lossData.monetary.currency_symbol;
+                return (
+                  <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
+                      <p className="text-xs text-muted">{tl("moneyLossToday")}</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">{sym}{lossData.monetary.loss_today.toFixed(2)}</p>
+                      <p className="text-xs text-muted-light">{tl("perDay")}: {sym}{lossData.monetary.avg_daily_loss.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
+                      <p className="text-xs text-muted">{tl("moneyLoss7d")}</p>
+                      <p className="mt-1 text-xl font-bold text-red-600">{sym}{lossData.monetary.loss_7d.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
+                      <p className="text-xs text-muted">{tl("moneyLossMonthly")}</p>
+                      <p className="mt-1 text-xl font-bold text-brand">{sym}{lossData.monetary.loss_monthly_projected.toFixed(2)}</p>
+                      <p className="text-xs text-muted-light">{tl("projected")}</p>
+                    </div>
+                    <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
+                      <p className="text-xs text-muted">{tl("moneyLossYearly")}</p>
+                      <p className="mt-1 text-xl font-bold text-brand">{sym}{lossData.monetary.loss_yearly_projected.toFixed(2)}</p>
+                      <p className="text-xs text-muted-light">{tl("projected")}</p>
+                    </div>
                   </div>
-                  <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-                    <p className="text-xs text-muted">{tl("moneyLoss7d")}</p>
-                    <p className="mt-1 text-xl font-bold text-red-600">{lossData.monetary.loss_7d.toFixed(2)}</p>
-                  </div>
-                  <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
-                    <p className="text-xs text-muted">{tl("moneyLossMonthly")}</p>
-                    <p className="mt-1 text-xl font-bold text-brand">{lossData.monetary.loss_monthly_projected.toFixed(2)}</p>
-                    <p className="text-xs text-muted-light">{tl("projected")}</p>
-                  </div>
-                  <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
-                    <p className="text-xs text-muted">{tl("moneyLossYearly")}</p>
-                    <p className="mt-1 text-xl font-bold text-brand">{lossData.monetary.loss_yearly_projected.toFixed(2)}</p>
-                    <p className="text-xs text-muted-light">{tl("projected")}</p>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
               {!lossData.monetary && (
                 <div className="mb-6 rounded-xl border border-border bg-surface-hover p-4 text-sm text-muted">{tl("noPriceSet")}</div>
               )}

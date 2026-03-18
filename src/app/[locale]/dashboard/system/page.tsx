@@ -9,8 +9,19 @@ import SolarEdgeInstructions from "@/components/SolarEdgeInstructions";
 interface SolarSystem {
   id: string; user_id: string; site_id: string; api_key: string; system_name: string;
   provider: string; created_at: string; last_synced_at: string | null;
-  electricity_price_per_kwh: number | null; latitude: number | null; longitude: number | null;
+  electricity_price_per_kwh: number | null; currency: string;
+  latitude: number | null; longitude: number | null;
   peak_power_kwp: number | null; azimuth: number | null; tilt: number | null;
+}
+
+const CURRENCIES: { code: string; symbol: string; label: string }[] = [
+  { code: "ILS", symbol: "₪", label: "₪ ILS" },
+  { code: "USD", symbol: "$", label: "$ USD" },
+  { code: "EUR", symbol: "€", label: "€ EUR" },
+];
+
+function currencySymbol(code: string): string {
+  return CURRENCIES.find((c) => c.code === code)?.symbol ?? code;
 }
 
 export default function SystemPage() {
@@ -26,12 +37,13 @@ export default function SystemPage() {
   const [siteId, setSiteId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [electricityPrice, setElectricityPrice] = useState("");
+  const [currency, setCurrency] = useState("ILS");
 
   const fetchSystem = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     const { data } = await supabase.from("solar_systems").select("*").eq("user_id", user.id).single();
-    if (data) { setSystem(data); setSystemName(data.system_name); setSiteId(data.site_id); setApiKey(data.api_key); setElectricityPrice(data.electricity_price_per_kwh?.toString() ?? ""); }
+    if (data) { setSystem(data); setSystemName(data.system_name); setSiteId(data.site_id); setApiKey(data.api_key); setElectricityPrice(data.electricity_price_per_kwh?.toString() ?? ""); setCurrency(data.currency ?? "ILS"); }
     setLoading(false);
   }, [supabase]);
 
@@ -41,14 +53,14 @@ export default function SystemPage() {
     e.preventDefault(); setFormError(null); setFormLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setFormError("Not authenticated"); setFormLoading(false); return; }
-    const { data, error } = await supabase.from("solar_systems").insert({ user_id: user.id, system_name: systemName, site_id: siteId, api_key: apiKey, provider: "solaredge", electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null }).select().single();
+    const { data, error } = await supabase.from("solar_systems").insert({ user_id: user.id, system_name: systemName, site_id: siteId, api_key: apiKey, provider: "solaredge", electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null, currency }).select().single();
     if (error) { setFormError(error.message); setFormLoading(false); return; }
     setSystem(data); setFormLoading(false);
   }
 
   async function handleUpdate(e: React.FormEvent) {
     e.preventDefault(); if (!system) return; setFormError(null); setFormLoading(true);
-    const { data, error } = await supabase.from("solar_systems").update({ system_name: systemName, site_id: siteId, api_key: apiKey, electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null }).eq("id", system.id).select().single();
+    const { data, error } = await supabase.from("solar_systems").update({ system_name: systemName, site_id: siteId, api_key: apiKey, electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null, currency }).eq("id", system.id).select().single();
     if (error) { setFormError(error.message); setFormLoading(false); return; }
     setSystem(data); setEditing(false); setFormLoading(false);
   }
@@ -58,7 +70,7 @@ export default function SystemPage() {
     setFormLoading(true);
     const { error } = await supabase.from("solar_systems").delete().eq("id", system.id);
     if (error) { setFormError(error.message); setFormLoading(false); return; }
-    setSystem(null); setSystemName(""); setSiteId(""); setApiKey(""); setElectricityPrice(""); setFormLoading(false);
+    setSystem(null); setSystemName(""); setSiteId(""); setApiKey(""); setElectricityPrice(""); setCurrency("ILS"); setFormLoading(false);
   }
 
   const inputClass = "block w-full rounded-xl border border-border bg-background px-4 py-2.5 text-foreground shadow-sm transition-colors focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand placeholder:text-muted-light";
@@ -99,10 +111,18 @@ export default function SystemPage() {
             <label htmlFor="apiKey" className="mb-1.5 block text-sm font-medium text-foreground">{t("apiKey")}</label>
             <input id="apiKey" type="password" required value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={inputClass} placeholder={t("apiKeyPlaceholder")} />
           </div>
-          <div>
-            <label htmlFor="electricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
-            <input id="electricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
-            <p className="mt-1 text-xs text-muted-light">{t("electricityPriceHint")}</p>
+          <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+            <div>
+              <label htmlFor="electricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
+              <input id="electricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
+            </div>
+            <div>
+              <label htmlFor="currency" className="mb-1.5 block text-sm font-medium text-foreground">{t("currency")}</label>
+              <select id="currency" value={currency} onChange={(e) => setCurrency(e.target.value)} className={inputClass}>
+                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+              </select>
+            </div>
+            <p className="text-xs text-muted-light sm:col-span-2">{t("electricityPriceHint")}</p>
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-medium text-foreground">{t("provider")}</label>
@@ -156,15 +176,23 @@ export default function SystemPage() {
               <label htmlFor="editApiKey" className="mb-1.5 block text-sm font-medium text-foreground">{t("apiKey")}</label>
               <input id="editApiKey" type="password" required value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={inputClass} />
             </div>
-            <div>
-              <label htmlFor="editElectricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
-              <input id="editElectricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
-              <p className="mt-1 text-xs text-muted-light">{t("electricityPriceHint")}</p>
+            <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+              <div>
+                <label htmlFor="editElectricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
+                <input id="editElectricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
+              </div>
+              <div>
+                <label htmlFor="editCurrency" className="mb-1.5 block text-sm font-medium text-foreground">{t("currency")}</label>
+                <select id="editCurrency" value={currency} onChange={(e) => setCurrency(e.target.value)} className={inputClass}>
+                  {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                </select>
+              </div>
+              <p className="text-xs text-muted-light sm:col-span-2">{t("electricityPriceHint")}</p>
             </div>
             {formError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{formError}</div>}
             <div className="flex gap-3">
               <button type="submit" disabled={formLoading} className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50">{formLoading ? t("saving") : t("save")}</button>
-              <button type="button" onClick={() => { setEditing(false); setFormError(null); setSystemName(system.system_name); setSiteId(system.site_id); setApiKey(system.api_key); setElectricityPrice(system.electricity_price_per_kwh?.toString() ?? ""); }}
+              <button type="button" onClick={() => { setEditing(false); setFormError(null); setSystemName(system.system_name); setSiteId(system.site_id); setApiKey(system.api_key); setElectricityPrice(system.electricity_price_per_kwh?.toString() ?? ""); setCurrency(system.currency ?? "ILS"); }}
                 className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-hover">{t("cancelEdit")}</button>
             </div>
           </form>
@@ -196,7 +224,7 @@ export default function SystemPage() {
               <div>
                 <dt className="text-sm text-muted">{t("electricityPrice")}</dt>
                 <dd className="mt-1 font-medium text-foreground">
-                  {system.electricity_price_per_kwh != null ? `${system.electricity_price_per_kwh} / kWh` : t("notSet")}
+                  {system.electricity_price_per_kwh != null ? `${currencySymbol(system.currency)}${system.electricity_price_per_kwh} / kWh` : t("notSet")}
                 </dd>
               </div>
               <div>

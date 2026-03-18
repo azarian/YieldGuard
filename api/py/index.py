@@ -108,7 +108,7 @@ async def _get_system(token: str) -> dict:
     systems = await _supabase_query(
         token,
         "solar_systems",
-        {"select": "id,system_name,site_id,last_synced_at,latitude,longitude,peak_power_kwp,azimuth,tilt,electricity_price_per_kwh"},
+        {"select": "id,system_name,site_id,last_synced_at,latitude,longitude,peak_power_kwp,azimuth,tilt,electricity_price_per_kwh,currency"},
     )
     if not systems:
         raise HTTPException(status_code=404, detail="No solar system registered")
@@ -499,7 +499,12 @@ def _generate_recommendations(system_id: str, losses: dict) -> list[dict]:
     return recs
 
 
-def _compute_monetary(losses: dict, price_per_kwh: float | None) -> dict | None:
+CURRENCY_SYMBOLS = {"ILS": "₪", "USD": "$", "EUR": "€"}
+
+
+def _compute_monetary(
+    losses: dict, price_per_kwh: float | None, currency: str = "ILS"
+) -> dict | None:
     if not price_per_kwh or price_per_kwh <= 0:
         return None
 
@@ -516,6 +521,8 @@ def _compute_monetary(losses: dict, price_per_kwh: float | None) -> dict | None:
 
     return {
         "currency_per_kwh": price_per_kwh,
+        "currency": currency,
+        "currency_symbol": CURRENCY_SYMBOLS.get(currency, currency),
         "loss_today": round(loss_today, 2),
         "loss_7d": round(loss_7d, 2),
         "loss_monthly_projected": round(loss_monthly_projected, 2),
@@ -593,7 +600,11 @@ async def analyze_losses(request: Request):
             "longitude": lng,
         },
         "losses": losses,
-        "monetary": _compute_monetary(losses, system.get("electricity_price_per_kwh")),
+        "monetary": _compute_monetary(
+            losses,
+            system.get("electricity_price_per_kwh"),
+            system.get("currency", "ILS"),
+        ),
         "recommendations_created": len(stored_recs),
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }

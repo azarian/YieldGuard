@@ -105,6 +105,7 @@
     "electricityPrice": "Electricity Sell Price (per kWh)",
     "electricityPricePlaceholder": "e.g. 0.48",
     "electricityPriceHint": "Your rate for selling solar energy back to the grid. Used to calculate monetary losses.",
+    "currency": "Currency",
     "instructionsTitle": "How to get your SolarEdge API Key and Site ID",
     "instructionsToggle": "Show instructions",
     "instructionsHide": "Hide instructions",

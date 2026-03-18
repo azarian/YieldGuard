@@ -105,6 +105,7 @@
     "electricityPrice": "מחיר מכירת חשמל (לקוט\"ש)",
     "electricityPricePlaceholder": "לדוגמה 0.48",
     "electricityPriceHint": "התעריף שלכם למכירת אנרגיה סולארית לרשת. משמש לחישוב הפסדים כספיים.",
+    "currency": "מטבע",
     "instructionsTitle": "כיצד להשיג את מפתח ה-API ומזהה האתר של SolarEdge",
     "instructionsToggle": "הצגת הוראות",
     "instructionsHide": "הסתרת הוראות",
