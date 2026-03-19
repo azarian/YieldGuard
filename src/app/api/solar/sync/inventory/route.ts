@@ -14,7 +14,9 @@ export async function GET() {
 
   const { data: system } = await supabase
     .from("solar_systems")
-    .select("id, system_name, last_synced_at, installation_date")
+    .select(
+      "id, system_name, last_synced_at, installation_date, se_portal_username"
+    )
     .eq("user_id", user.id)
     .single();
 
@@ -25,11 +27,14 @@ export async function GET() {
     );
   }
 
+  // Fetch ALL equipment (inverters and optimizers)
   const { data: equipment } = await supabase
     .from("equipment")
-    .select("id, serial_number, equipment_type, name, manufacturer, model, connected_to")
+    .select(
+      "id, serial_number, equipment_type, name, manufacturer, model, connected_to"
+    )
     .eq("system_id", system.id)
-    .eq("equipment_type", "inverter");
+    .order("equipment_type", { ascending: true });
 
   if (!equipment || equipment.length === 0) {
     return NextResponse.json({
@@ -37,15 +42,18 @@ export async function GET() {
       last_synced_at: system.last_synced_at,
       installation_date: system.installation_date,
       equipment: [],
-      total_data_points: 0,
+      inverter_count: 0,
+      optimizer_count: 0,
       date_range: null,
+      sync_history: [],
+      portal_configured: !!system.se_portal_username,
+      portal_username: system.se_portal_username ?? null,
     });
   }
 
   // Get data coverage per equipment
   const equipmentWithCoverage = await Promise.all(
     equipment.map(async (eq) => {
-      // Get earliest and latest timestamps
       const [{ data: earliest }, { data: latest }, { data: countResult }] =
         await Promise.all([
           supabase
@@ -107,7 +115,12 @@ export async function GET() {
     .order("created_at", { ascending: false })
     .limit(10);
 
-  const inverterCount = equipmentWithCoverage.length;
+  const inverterCount = equipmentWithCoverage.filter(
+    (e) => e.equipment_type === "inverter"
+  ).length;
+  const optimizerCount = equipmentWithCoverage.filter(
+    (e) => e.equipment_type === "optimizer"
+  ).length;
 
   return NextResponse.json({
     system_name: system.system_name,
@@ -115,9 +128,12 @@ export async function GET() {
     installation_date: system.installation_date,
     equipment: equipmentWithCoverage,
     inverter_count: inverterCount,
+    optimizer_count: optimizerCount,
     date_range: overallEarliest
       ? { from: overallEarliest, to: overallLatest }
       : null,
     sync_history: syncJobs ?? [],
+    portal_configured: !!system.se_portal_username,
+    portal_username: system.se_portal_username ?? null,
   });
 }

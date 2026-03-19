@@ -10,19 +10,26 @@
 1. [Summary](#summary)
 2. [Public Monitoring API](#public-monitoring-api)
 3. [Old Portal API (solaredge-apigw)](#old-portal-api-solaredge-apigw)
-4. [New CNI Portal API (services/cni)](#new-cni-portal-api-servicescni)
-5. [Authentication Flows](#authentication-flows)
-6. [What Works vs What Doesn't](#what-works-vs-what-doesnt)
-7. [Tested Credentials & Site Info](#tested-credentials--site-info)
-8. [Future Avenues to Explore](#future-avenues-to-explore)
+4. [Old Portal Web Endpoints (solaredge-web)](#old-portal-web-endpoints-solaredge-web)
+5. [New CNI Portal API (services/cni)](#new-cni-portal-api-servicescni)
+6. [Authentication Flows](#authentication-flows)
+7. [What Works vs What Doesn't](#what-works-vs-what-doesnt)
+8. [Open-Source Projects and Tools](#open-source-projects-and-tools)
+9. [Tested Credentials & Site Info](#tested-credentials--site-info)
+10. [Recommended Implementation Path](#recommended-implementation-path)
+11. [Future Avenues to Explore](#future-avenues-to-explore)
 
 ---
 
 ## Summary
 
-SolarEdge has three API surfaces. The **public API** works well for inverter-level and site-level data but returns empty for per-optimizer queries. The **old portal API** only serves the `layout/logical` endpoint (everything else returns 404). The **new CNI portal API** requires complex Cognito OAuth authentication and blocks chart/data execution with **403 Forbidden** for residential site OWNER accounts, despite the same user being able to see the data in the browser-based SolarEdge monitoring portal.
+SolarEdge has three API surfaces plus two unofficial web endpoints. The **public API** works well for inverter-level and site-level data but returns empty for per-optimizer queries. The **old portal API** (`solaredge-apigw`) serves `layout/logical` and `layout/energy`. The **old portal web endpoints** (`solaredge-web`) include two critical endpoints: `chartData` (per-optimizer historical time-series) and `playbackData` (per-optimizer snapshot data). The **new CNI portal API** requires complex Cognito OAuth authentication and blocks chart/data execution with **403 Forbidden** for residential site OWNER accounts.
 
-**Bottom line:** Per-optimizer historical telemetry cannot be retrieved programmatically for residential accounts as of March 2026.
+**Bottom line (UPDATED):** Two unofficial `solaredge-web` endpoints can retrieve per-optimizer historical telemetry:
+1. **`/solaredge-web/p/chartData`** -- returns time-series data (Power, Voltage, Current, Energy, PowerBox Voltage) per optimizer for arbitrary date ranges. Used by the `solaredgeoptimizers` Python package.
+2. **`/solaredge-web/p/playbackData`** -- returns per-optimizer power snapshots at 15-min intervals. Used by the SEDRI project.
+
+Both require portal session authentication (not the public API key).
 
 ---
 
@@ -153,6 +160,170 @@ Returns HTTP 302 redirect to `/solaredge-apigw/api/user/details` with `Set-Cooki
 - `/sites/{siteId}/components/{id}/telemetry`
 - `/sites/{siteId}/reporters/{id}/data`
 - `/sites/{siteId}/playback`
+
+---
+
+## Old Portal Web Endpoints (solaredge-web)
+
+**Base URL:** `https://monitoring.solaredge.com/solaredge-web/p/`
+**Auth:** Session-based (same JSESSIONID + CSRF-TOKEN from the `/solaredge-apigw/api/login` flow)
+
+These endpoints are used by the old SolarEdge monitoring portal SPA and are the key to per-optimizer historical data. Discovered via reverse-engineering by the `solaredgeoptimizers` Python package (ProudElm/packaging_solaredgeoptimizers on GitHub).
+
+### Login (shared with solaredge-apigw)
+
+The same session cookies from the `solaredge-apigw/api/login` POST work here. Additionally, the `solaredge-web/p/login` endpoint can be used directly with HTTP Basic Auth:
+
+```python
+session = requests.Session()
+# Warm up the session
+session.head("https://monitoring.solaredge.com/solaredge-apigw/api/sites/{siteid}/layout/energy")
+# Login
+session.auth = (username, password)
+session.get("https://monitoring.solaredge.com/solaredge-web/p/login")
+# Extract CSRF token from cookies
+csrf_token = session.cookies["CSRF-TOKEN"]
+```
+
+### Endpoint 1: chartData (Per-Optimizer Historical Time-Series)
+
+**This is the most important endpoint for per-optimizer historical data.**
+
+```
+GET https://monitoring.solaredge.com/solaredge-web/p/chartData
+    ?reporterId={optimizerInternalId}
+    &fieldId={siteId}
+    &reporterType=
+    &startDate={unixTimestampMs}
+    &endDate={unixTimestampMs}
+    &uom=W
+    &parameterName={parameter}
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|---|---|---|
+| `reporterId` | integer | The optimizer's internal ID (from `layout/logical` tree, e.g., `100714142`) |
+| `fieldId` | integer | The site ID (e.g., `1353684`) |
+| `reporterType` | string | Leave empty |
+| `startDate` | integer | Start time as Unix timestamp in **milliseconds** |
+| `endDate` | integer | End time as Unix timestamp in **milliseconds** |
+| `uom` | string | Unit of measure, typically `W` |
+| `parameterName` | string | The measurement type (see table below) |
+
+**Valid `parameterName` values by item type:**
+
+| Item Type | Valid Parameters |
+|---|---|
+| **Panel/Optimizer** | `Power`, `Current`, `Voltage`, `Energy`, `PowerBox Voltage` |
+| **String** | `Energy`, `Power` |
+| **Inverter** | `AC Energy`, `AC Frequency`, `AC Frequency P2`, `AC Frequency P3`, `AC Voltage`, `AC Voltage P2`, `AC Voltage P3`, `AC Current`, `AC Current P2`, `AC Current P3`, `Power`, `DC Voltage`, `Purchased back feed AC Energy`, `Total Reactive Power`, `Power Factor` |
+
+**Response format:**
+
+```json
+{
+  "dateValuePairs": [
+    { "date": 1709874000000, "value": 245.3 },
+    { "date": 1709874900000, "value": 312.7 },
+    ...
+  ]
+}
+```
+
+- `date` is Unix timestamp in milliseconds
+- `value` is the measurement value in the requested unit
+- Data points are at ~15-minute intervals
+- The `reporterId` must be the **internal numeric ID** (not the serial number). Get this from `layout/logical`.
+
+**Required headers for authenticated requests:**
+
+```python
+headers = {
+    "authority": "monitoring.solaredge.com",
+    "accept": "*/*",
+    "content-type": "application/json",
+    "cookie": session_cookies_string,
+    "origin": "https://monitoring.solaredge.com",
+    "referer": "https://monitoring.solaredge.com/solaredge-web/p/site/{siteId}/",
+    "x-csrf-token": csrf_token,
+    "x-kl-ajax-request": "Ajax_Request",
+    "x-requested-with": "XMLHttpRequest",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ..."
+}
+```
+
+**Date handling example (Python):**
+
+```python
+from datetime import datetime, timedelta
+
+# Default to today
+start = datetime(2025, 3, 1)
+start_ms = int(start.timestamp() * 1000)  # e.g., 1709254800000
+end_ms = int((start + timedelta(days=1)).total_seconds() * 1000) + start_ms
+
+# Query one optimizer's power for March 1, 2025
+url = (f"https://monitoring.solaredge.com/solaredge-web/p/chartData"
+       f"?reporterId=100714142&fieldId=1353684&reporterType="
+       f"&startDate={start_ms}&endDate={end_ms}&uom=W&parameterName=Power")
+```
+
+**Rate limiting:** The `solaredgeoptimizers` library adds 100ms delay between requests and retries on connection resets with 5s cooldown (3 retries max). This suggests SolarEdge may throttle aggressive scraping.
+
+### Endpoint 2: playbackData (Per-Optimizer Snapshots)
+
+```
+POST https://monitoring.solaredge.com/solaredge-web/p/playbackData
+Content-Type: application/x-www-form-urlencoded
+X-CSRF-TOKEN: {csrf_token}
+Body: fieldId={siteId}&timeUnit={timeUnit}
+```
+
+**`timeUnit` values:**
+| Value | Meaning |
+|---|---|
+| `4` | DAILY (shows 15-min intervals for recent day) |
+| `5` | WEEKLY |
+| `6` | MONTHLY |
+
+**Response format:**
+
+Returns a nested dictionary with timestamps as keys, mapping optimizer IDs to wattage readings at 15-minute intervals. The response uses single quotes and non-standard JSON, requiring string cleanup before parsing.
+
+**Note:** The SEDRI project states "pData.py can only get 7 days of data. That's all SolarEdge provides" for this endpoint, suggesting a rolling 7-day window.
+
+### Endpoint 3: publicSystemData (Per-Optimizer Current Measurements)
+
+```
+GET https://monitoringpublic.solaredge.com/solaredge-web/p/publicSystemData
+    ?reporterId={optimizerInternalId}
+    &type=panel
+    &activeTab=0
+    &fieldId={siteId}
+    &isPublic=true
+    &locale=en_US
+```
+
+**Note:** This endpoint is on `monitoringpublic.solaredge.com` (different host). It returns current/last measurements, not historical data.
+
+**Response format:**
+
+```json
+{
+  "serialNumber": "12272871-D2",
+  "description": "Module 1.0.8",
+  "lastMeasurementDate": "2025-03-08 14:30:00",
+  "model": "P505",
+  "manufacturer": "SolarEdge",
+  "measurements": {
+    "Current [A]": 8.45,
+    "Optimizer Voltage [V]": 39.2,
+    "Power [W]": 331.0,
+    "Voltage [V]": 41.1
+  }
+}
+```
 
 ---
 
@@ -397,17 +568,29 @@ Sets cookies: `se_monitoring_auth` (path=/services), `se_monitoring_refresh` (pa
 | Site power | Public API | 15-min | Full history |
 | Site power details (FeedIn, etc.) | Public API | 15-min | Full history |
 | Inverter telemetry | Public API | 15-min | Full history |
-| Optimizer serial numbers + names | Old Portal | Discovery | N/A |
-| Today's per-optimizer daily energy | Old Portal | Daily total | Today only |
+| Optimizer serial numbers + internal IDs | Old Portal (`layout/logical`) | Discovery | N/A |
+| Today's per-optimizer daily energy | Old Portal (`layout/logical`) | Daily total | Today only |
+| **Per-optimizer historical power/voltage/current** | **Old Portal Web (`chartData`)** | **~15-min** | **Arbitrary date range** |
+| **Per-optimizer current measurements** | **Public System Data** | **Snapshot** | **Last reading only** |
+| **Per-optimizer 15-min snapshots** | **Old Portal Web (`playbackData`)** | **15-min** | **~7 days rolling** |
+| Per-optimizer lifetime energy | Old Portal (`layout/energy`) | Cumulative | Total only |
 | Site metadata (location, peak power) | Public API + CNI | N/A | Current |
 
-### ❌ Cannot retrieve
+### ❌ Cannot retrieve (via official/public API)
 
 | Data | Why |
 |---|---|
-| Historical per-optimizer telemetry | Public API returns empty; CNI API returns 403 |
-| Per-optimizer 15-min power data | Same as above |
-| Per-optimizer historical daily energy | `layout/logical` only returns today; no date param support |
+| Per-optimizer data via public API | `/equipment/{siteId}/{serialNumber}/data` returns empty for optimizer SNs |
+| CNI portal chart data | 403 Forbidden for residential OWNER accounts |
+| Data export via CNI | 403 Forbidden |
+
+### ⚠️ Can retrieve but unofficial (may break)
+
+| Data | Endpoint | Risk |
+|---|---|---|
+| Per-optimizer historical telemetry | `solaredge-web/p/chartData` | Unofficial, session-auth, may be rate-limited or disabled |
+| Per-optimizer snapshots | `solaredge-web/p/playbackData` | Unofficial, ~7 day limit, non-standard JSON |
+| Per-optimizer current readings | `monitoringpublic.solaredge.com/...publicSystemData` | Public but undocumented |
 
 ---
 
@@ -430,6 +613,96 @@ Sets cookies: `se_monitoring_auth` (path=/services), `se_monitoring_refresh` (pa
 12270B03-47  (Module 1.0.11)
 ... (36 total)
 ```
+
+---
+
+## Open-Source Projects and Tools
+
+### 1. solaredgeoptimizers (ProudElm) -- MOST RELEVANT
+
+- **GitHub:** https://github.com/ProudElm/solaredgeoptimizers (HA integration, 61 stars)
+- **Python package:** https://github.com/ProudElm/packaging_solaredgeoptimizers (the actual API client)
+- **PyPI:** `pip install solaredgeoptimizers`
+- **What it does:** Home Assistant integration that retrieves per-optimizer current readings (Power, Current, Voltage, Optimizer Voltage, Lifetime Energy) from the SolarEdge portal.
+- **Key endpoints used:**
+  - `solaredge-apigw/api/sites/{siteId}/layout/logical` -- discovers all optimizers
+  - `solaredge-apigw/api/sites/{siteId}/layout/energy?timeUnit=ALL` -- lifetime energy per optimizer
+  - `monitoringpublic.solaredge.com/solaredge-web/p/publicSystemData` -- current measurements per optimizer
+  - `solaredge-web/p/chartData` -- **historical time-series per optimizer** (the key endpoint)
+- **Auth:** Username/password session-based login via `solaredge-web/p/login`
+- **Rate handling:** 100ms delay between requests, 5s cooldown on connection reset, 3 retries
+- **Update interval:** Every 15 minutes
+
+### 2. SEDRI (dkperf)
+
+- **GitHub:** https://github.com/dkperf/SEDRI
+- **What it does:** Retrieves per-panel optimizer data and inverter data, stores locally, generates plots.
+- **Key endpoints used:**
+  - `solaredge-apigw/api/login` -- session auth
+  - `solaredge-web/p/playbackData` -- per-optimizer 15-min power snapshots
+  - `monitoringapi.solaredge.com/equipment/{siteId}/{inverterId}/data` -- inverter telemetry
+- **Limitation:** "pData.py can only get 7 days of data. That's all SolarEdge provides" for `playbackData`.
+- **Auth:** JSESSIONID + CSRF-TOKEN from form login
+
+### 3. solaredge-webscrape (dragoshenron)
+
+- **GitHub:** https://github.com/dragoshenron/solaredge-webscrape
+- **What it does:** Bash script that downloads per-optimizer data (Current, Energy, Voltage, PowerBox Voltage, Power) from the SolarEdge web portal.
+- **Auth:** Uses a `requesterId` extracted manually from Chrome DevTools.
+- **Output:** Can post to InfluxDB.
+- **Status:** Alpha. Requires manual auth setup.
+
+### 4. solaredge (jbuehl) -- Hardware-level approach
+
+- **GitHub:** https://github.com/jbuehl/solaredge
+- **What it does:** Captures per-optimizer telemetry by intercepting the inverter's network traffic or using RS232/RS485 serial connections.
+- **Not an API client** -- requires physical access to the inverter's network or serial port.
+- **Limitation:** Modern inverters use SSL/TLS encryption, limiting compatibility to serial connections.
+
+### 5. solaredge-local (drobtravels) -- Local API
+
+- **GitHub:** https://github.com/drobtravels/solaredge-local
+- **PyPI:** `pip install solaredge-local`
+- **What it does:** Accesses the local API on SetApp-based SolarEdge inverters (no display, HD-Wave, newer 3-phase EU models).
+- **Key endpoint:** `http://{inverter-ip}/web/v1/maintenance` -- per-optimizer data via Protocol Buffers.
+- **No auth required** for local API.
+- **Critical limitation:** "Recent firmware versions disable local access." Many users report it no longer works.
+
+### 6. solaredge_modbus (nmakel) -- Modbus approach
+
+- **GitHub:** https://github.com/nmakel/solaredge_modbus
+- **What it does:** Reads data directly from SolarEdge inverters via Modbus TCP/RTU (SunSpec protocol).
+- **Provides:** Real-time inverter and meter data. Per-optimizer data limited to what the inverter exposes via Modbus registers.
+- **Requires:** LAN access, Modbus TCP enabled on inverter.
+
+---
+
+## Recommended Implementation Path
+
+Based on the research, the best approach for YieldGuard to get per-optimizer historical data:
+
+### Phase 1: Use `chartData` endpoint (highest priority)
+
+The `solaredge-web/p/chartData` endpoint is the only known way to get arbitrary historical per-optimizer time-series data. Implementation steps:
+
+1. **Store portal credentials** alongside the existing API key (username + password for `monitoring.solaredge.com`)
+2. **Discover optimizers** via `layout/logical` -- get internal IDs (not serial numbers)
+3. **Fetch historical data** via `chartData` with `parameterName=Power` for each optimizer
+4. **Backfill** by iterating date ranges (e.g., 1 day at a time per optimizer)
+5. **Rate limit** requests: ~100ms between calls, handle connection resets gracefully
+
+### Phase 2: Daily polling for ongoing data
+
+- Poll `layout/logical` daily for today's per-optimizer energy totals
+- Poll `chartData` for yesterday's 15-min data once per day
+- Use `publicSystemData` for near-real-time current readings
+
+### Key implementation concerns:
+
+- **Session management:** Sessions expire; need to re-authenticate periodically
+- **Rate limiting:** No documented limits, but `solaredgeoptimizers` library suggests SolarEdge throttles at ~10 req/sec
+- **Fragility:** These are unofficial endpoints that SolarEdge could change or block at any time
+- **Identifier mapping:** `chartData` uses internal numeric IDs (from `layout/logical`), not serial numbers. Must maintain a mapping table.
 
 ---
 

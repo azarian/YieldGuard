@@ -3,9 +3,11 @@
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+import asyncio
 import httpx
 import os
 import statistics
+import traceback
 from datetime import datetime, timezone, timedelta
 
 try:
@@ -14,7 +16,12 @@ try:
 except ImportError:
     pass
 
-app = FastAPI(title="YieldGuard Analytics", version="0.3.0")
+try:
+    from api.py.solaredge_client import SolarEdgeOptimizerClient
+except ImportError:
+    from solaredge_client import SolarEdgeOptimizerClient
+
+app = FastAPI(title="YieldGuard Analytics", version="0.4.0")
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
@@ -746,6 +753,140 @@ async def update_recommendation(rec_id: str, request: Request):
     )
 
     return {"updated": updated}
+
+
+# ── Optimizer Sync Endpoints ──────────────────────────────────────────────────
+
+
+_portal_clients: dict[str, SolarEdgeOptimizerClient] = {}
+
+
+def _get_portal_client(site_id: int, username: str, password: str, force_new: bool = False) -> SolarEdgeOptimizerClient:
+    """Get or create a cached portal client for the given site."""
+    key = f"{site_id}:{username}"
+    client = _portal_clients.get(key) if not force_new else None
+    if client is None or client.password != password:
+        client = SolarEdgeOptimizerClient(
+            site_id=site_id, username=username, password=password,
+        )
+        _portal_clients[key] = client
+    return client
+
+
+@app.post("/api/py/portal/discover")
+async def portal_discover(request: Request):
+    """Authenticate to the SolarEdge portal and discover optimizers.
+
+    Body: { site_id, username, password }
+    Returns: { optimizers: [{ internal_id, serial_number, name, today_energy_kwh }] }
+    """
+    body = await request.json()
+    site_id = body.get("site_id")
+    username = body.get("username")
+    password = body.get("password")
+
+    if not site_id or not username or not password:
+        raise HTTPException(status_code=400, detail="site_id, username, and password are required")
+
+    def _do_discover():
+        client = _get_portal_client(int(site_id), username, password)
+        client.authenticate()
+        return client.discover_optimizers()
+
+    try:
+        optimizers = await asyncio.to_thread(_do_discover)
+    except RuntimeError as e:
+        print(f"[portal/discover] Auth failed: {e}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        print(f"[portal/discover] Error: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Portal communication error: {e}")
+
+    return {
+        "optimizers": [
+            {
+                "internal_id": opt.internal_id,
+                "serial_number": opt.serial_number,
+                "name": opt.name,
+                "today_energy_kwh": opt.today_energy_kwh,
+            }
+            for opt in optimizers
+        ],
+    }
+
+
+@app.post("/api/py/portal/fetch-chunk")
+async def portal_fetch_chunk(request: Request):
+    """Fetch one day of optimizer telemetry for a single optimizer.
+
+    Body: { site_id, username, password, internal_id, serial_number, name, date, parameter }
+    Returns: { data_points: [{ ts, value }], count }
+    """
+    body = await request.json()
+    site_id = body.get("site_id")
+    username = body.get("username")
+    password = body.get("password")
+    internal_id = body.get("internal_id")
+    date_str = body.get("date")
+    parameter = body.get("parameter", "Power")
+
+    if not all([site_id, username, password, internal_id, date_str]):
+        raise HTTPException(status_code=400, detail="site_id, username, password, internal_id, and date are required")
+
+    try:
+        from api.py.solaredge_client import Optimizer
+    except ImportError:
+        from solaredge_client import Optimizer
+
+    opt = Optimizer(
+        internal_id=int(internal_id),
+        serial_number=body.get("serial_number", ""),
+        name=body.get("name", ""),
+    )
+
+    day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
+    def _do_fetch():
+        client = _get_portal_client(int(site_id), username, password)
+        if not client._authenticated:
+            client.authenticate()
+        return client.fetch_optimizer_telemetry(
+            optimizer=opt, start_date=day_start, end_date=day_end, parameter=parameter,
+        )
+
+    def _do_fetch_with_reauth():
+        client = _get_portal_client(int(site_id), username, password)
+        client.authenticate()
+        return client.fetch_optimizer_telemetry(
+            optimizer=opt, start_date=day_start, end_date=day_end, parameter=parameter,
+        )
+
+    try:
+        telemetry = await asyncio.to_thread(_do_fetch)
+    except RuntimeError as e:
+        if "authentication" in str(e).lower() or "401" in str(e):
+            try:
+                telemetry = await asyncio.to_thread(_do_fetch_with_reauth)
+            except Exception as retry_err:
+                print(f"[portal/fetch-chunk] Retry error: {retry_err}")
+                traceback.print_exc()
+                raise HTTPException(status_code=502, detail=f"Portal retry failed: {retry_err}")
+        else:
+            raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        print(f"[portal/fetch-chunk] Error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Portal communication error: {e}")
+
+    return {
+        "data_points": [
+            {"ts": dp.timestamp.isoformat(), "value": dp.value}
+            for dp in telemetry.data_points
+        ],
+        "count": len(telemetry.data_points),
+    }
 
 
 # ── Global error handler ────────────────────────────────────────────────────

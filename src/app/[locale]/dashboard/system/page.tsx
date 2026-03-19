@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
 import SolarEdgeInstructions from "@/components/SolarEdgeInstructions";
+import { SolarEdgeLogo, SolarEdgeIcon } from "@/components/SolarEdgeLogo";
 
 interface SolarSystem {
   id: string; user_id: string; site_id: string; api_key: string; system_name: string;
@@ -12,6 +13,7 @@ interface SolarSystem {
   electricity_price_per_kwh: number | null; currency: string;
   latitude: number | null; longitude: number | null;
   peak_power_kwp: number | null; azimuth: number | null; tilt: number | null;
+  se_portal_username: string | null;
 }
 
 const CURRENCIES: { code: string; symbol: string; label: string }[] = [
@@ -33,36 +35,99 @@ export default function SystemPage() {
   const [editing, setEditing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formLoading, setFormLoading] = useState(false);
+
+  // Provider selection
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+
+  // SolarEdge form fields
   const [systemName, setSystemName] = useState("");
   const [siteId, setSiteId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [electricityPrice, setElectricityPrice] = useState("");
   const [currency, setCurrency] = useState("ILS");
 
+  // Portal credentials
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [portalUsername, setPortalUsername] = useState("");
+  const [portalPassword, setPortalPassword] = useState("");
+  const [portalConfigured, setPortalConfigured] = useState(false);
+  const [portalSavedUser, setPortalSavedUser] = useState<string | null>(null);
+
   const fetchSystem = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    const { data } = await supabase.from("solar_systems").select("*").eq("user_id", user.id).single();
-    if (data) { setSystem(data); setSystemName(data.system_name); setSiteId(data.site_id); setApiKey(data.api_key); setElectricityPrice(data.electricity_price_per_kwh?.toString() ?? ""); setCurrency(data.currency ?? "ILS"); }
+    const { data } = await supabase
+      .from("solar_systems")
+      .select("id,user_id,site_id,api_key,system_name,provider,created_at,last_synced_at,electricity_price_per_kwh,currency,latitude,longitude,peak_power_kwp,azimuth,tilt,se_portal_username")
+      .eq("user_id", user.id)
+      .single();
+    if (data) {
+      setSystem(data);
+      setSystemName(data.system_name);
+      setSiteId(data.site_id);
+      setApiKey(data.api_key);
+      setElectricityPrice(data.electricity_price_per_kwh?.toString() ?? "");
+      setCurrency(data.currency ?? "ILS");
+      setPortalConfigured(!!data.se_portal_username);
+      setPortalSavedUser(data.se_portal_username ?? null);
+    }
     setLoading(false);
   }, [supabase]);
 
   useEffect(() => { fetchSystem(); }, [fetchSystem]);
 
+  async function savePortalCredentials(systemId: string) {
+    if (!portalUsername || !portalPassword) return;
+    try {
+      const res = await fetch("/api/solar/system/portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", username: portalUsername, password: portalPassword }),
+      });
+      if (res.ok) {
+        setPortalConfigured(true);
+        setPortalSavedUser(portalUsername);
+        setPortalPassword("");
+      }
+    } catch { /* handled silently — system is registered regardless */ }
+  }
+
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault(); setFormError(null); setFormLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setFormError("Not authenticated"); setFormLoading(false); return; }
-    const { data, error } = await supabase.from("solar_systems").insert({ user_id: user.id, system_name: systemName, site_id: siteId, api_key: apiKey, provider: "solaredge", electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null, currency }).select().single();
+    const { data, error } = await supabase.from("solar_systems").insert({
+      user_id: user.id, system_name: systemName, site_id: siteId, api_key: apiKey,
+      provider: "solaredge",
+      electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null,
+      currency,
+    }).select().single();
     if (error) { setFormError(error.message); setFormLoading(false); return; }
-    setSystem(data); setFormLoading(false);
+
+    if (portalUsername && portalPassword) {
+      await savePortalCredentials(data.id);
+    }
+
+    setSystem(data);
+    setFormLoading(false);
   }
 
   async function handleUpdate(e: React.FormEvent) {
     e.preventDefault(); if (!system) return; setFormError(null); setFormLoading(true);
-    const { data, error } = await supabase.from("solar_systems").update({ system_name: systemName, site_id: siteId, api_key: apiKey, electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null, currency }).eq("id", system.id).select().single();
+    const { data, error } = await supabase.from("solar_systems").update({
+      system_name: systemName, site_id: siteId, api_key: apiKey,
+      electricity_price_per_kwh: electricityPrice ? parseFloat(electricityPrice) : null,
+      currency,
+    }).eq("id", system.id).select().single();
     if (error) { setFormError(error.message); setFormLoading(false); return; }
-    setSystem(data); setEditing(false); setFormLoading(false);
+
+    if (portalUsername && portalPassword) {
+      await savePortalCredentials(system.id);
+    }
+
+    setSystem(data);
+    setEditing(false);
+    setFormLoading(false);
   }
 
   async function handleDelete() {
@@ -70,7 +135,9 @@ export default function SystemPage() {
     setFormLoading(true);
     const { error } = await supabase.from("solar_systems").delete().eq("id", system.id);
     if (error) { setFormError(error.message); setFormLoading(false); return; }
-    setSystem(null); setSystemName(""); setSiteId(""); setApiKey(""); setElectricityPrice(""); setCurrency("ILS"); setFormLoading(false);
+    setSystem(null); setSystemName(""); setSiteId(""); setApiKey(""); setElectricityPrice(""); setCurrency("ILS");
+    setSelectedProvider(null); setPortalUsername(""); setPortalPassword(""); setPortalConfigured(false); setPortalSavedUser(null);
+    setFormLoading(false);
   }
 
   const inputClass = "block w-full rounded-xl border border-border bg-background px-4 py-2.5 text-foreground shadow-sm transition-colors focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand placeholder:text-muted-light";
@@ -84,7 +151,82 @@ export default function SystemPage() {
     );
   }
 
-  /* ─── No system: registration form ─── */
+  /* ─── Portal credentials section (shared between register and edit forms) ─── */
+  const portalCredentialsJsx = (
+    <div className="rounded-2xl border border-border bg-surface">
+      <button
+        type="button"
+        onClick={() => setPortalOpen(!portalOpen)}
+        className="flex w-full items-center justify-between p-5 text-start"
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-light">
+            <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">{t("enhancedMonitoring")}</p>
+            <p className="mt-0.5 text-xs text-muted">
+              {portalConfigured
+                ? t("portalConnected", { username: portalSavedUser ?? "" })
+                : t("enhancedMonitoringHint")}
+            </p>
+          </div>
+        </div>
+        <svg
+          className={`h-5 w-5 text-muted transition-transform ${portalOpen ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {portalOpen && (
+        <div className="border-t border-border px-5 pb-5 pt-4">
+          <p className="mb-4 text-sm text-muted">{t("enhancedMonitoringDesc")}</p>
+
+          {portalConfigured && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-accent/20 bg-accent-light/20 p-3">
+              <svg className="h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm text-foreground">
+                {t("portalConnected", { username: portalSavedUser ?? "" })}
+              </span>
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="portalUsername" className="mb-1.5 block text-sm font-medium text-foreground">{t("portalUsername")}</label>
+              <input
+                id="portalUsername" type="text"
+                value={portalUsername}
+                onChange={(e) => setPortalUsername(e.target.value)}
+                placeholder={portalSavedUser || t("portalUsernamePlaceholder")}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="portalPassword" className="mb-1.5 block text-sm font-medium text-foreground">{t("portalPassword")}</label>
+              <input
+                id="portalPassword" type="password"
+                value={portalPassword}
+                onChange={(e) => setPortalPassword(e.target.value)}
+                placeholder="••••••••"
+                className={inputClass}
+              />
+            </div>
+          </div>
+
+          <p className="mt-3 text-[10px] text-muted-light">{t("portalSecurityNote")}</p>
+        </div>
+      )}
+    </div>
+  );
+
+  /* ─── No system: provider selection → form ─── */
   if (!system) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-12">
@@ -96,43 +238,92 @@ export default function SystemPage() {
         <h1 className="mb-2 text-3xl font-bold text-foreground">{t("registerTitle")}</h1>
         <p className="mb-8 text-muted">{t("registerSubtitle")}</p>
 
-        <div className="mb-6"><SolarEdgeInstructions /></div>
+        {/* ── Phase 1: Provider selection ─── */}
+        {!selectedProvider && (
+          <div>
+            <h2 className="mb-4 text-lg font-semibold text-foreground">{t("selectProvider")}</h2>
+            <p className="mb-6 text-sm text-muted">{t("selectProviderSubtitle")}</p>
 
-        <form onSubmit={handleRegister} className="space-y-5">
-          <div>
-            <label htmlFor="systemName" className="mb-1.5 block text-sm font-medium text-foreground">{t("systemName")}</label>
-            <input id="systemName" type="text" required value={systemName} onChange={(e) => setSystemName(e.target.value)} className={inputClass} placeholder={t("systemNamePlaceholder")} />
+            <button
+              onClick={() => setSelectedProvider("solaredge")}
+              className="group flex w-full items-center gap-5 rounded-2xl border-2 border-border bg-surface p-6 text-start transition-all hover:border-brand hover:shadow-md"
+            >
+              <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-border">
+                <SolarEdgeIcon className="h-9 w-9" />
+              </div>
+              <div className="flex-1">
+                <p className="text-lg font-semibold text-foreground group-hover:text-brand">{t("solarEdge")}</p>
+                <p className="mt-0.5 text-sm text-muted">{t("solarEdgeDesc")}</p>
+              </div>
+              <svg className="h-5 w-5 text-muted transition-colors group-hover:text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+
+            <p className="mt-6 text-center text-xs text-muted-light">{t("comingSoon")}</p>
           </div>
+        )}
+
+        {/* ── Phase 2: SolarEdge form ─── */}
+        {selectedProvider === "solaredge" && (
           <div>
-            <label htmlFor="siteId" className="mb-1.5 block text-sm font-medium text-foreground">{t("siteId")}</label>
-            <input id="siteId" type="text" required value={siteId} onChange={(e) => setSiteId(e.target.value)} className={inputClass} placeholder={t("siteIdPlaceholder")} />
-          </div>
-          <div>
-            <label htmlFor="apiKey" className="mb-1.5 block text-sm font-medium text-foreground">{t("apiKey")}</label>
-            <input id="apiKey" type="password" required value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={inputClass} placeholder={t("apiKeyPlaceholder")} />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
-            <div>
-              <label htmlFor="electricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
-              <input id="electricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
+            {/* Form header with SolarEdge branding */}
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-border">
+                  <SolarEdgeIcon className="h-6 w-6" />
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-foreground">{t("solarEdgeSetup")}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedProvider(null)}
+                className="text-xs text-muted hover:text-foreground transition-colors"
+              >
+                {t("changeProvider")}
+              </button>
             </div>
-            <div>
-              <label htmlFor="currency" className="mb-1.5 block text-sm font-medium text-foreground">{t("currency")}</label>
-              <select id="currency" value={currency} onChange={(e) => setCurrency(e.target.value)} className={inputClass}>
-                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
-              </select>
-            </div>
-            <p className="text-xs text-muted-light sm:col-span-2">{t("electricityPriceHint")}</p>
+
+            <div className="mb-6"><SolarEdgeInstructions /></div>
+
+            <form onSubmit={handleRegister} className="space-y-5">
+              <div>
+                <label htmlFor="systemName" className="mb-1.5 block text-sm font-medium text-foreground">{t("systemName")}</label>
+                <input id="systemName" type="text" required value={systemName} onChange={(e) => setSystemName(e.target.value)} className={inputClass} placeholder={t("systemNamePlaceholder")} />
+              </div>
+              <div>
+                <label htmlFor="siteId" className="mb-1.5 block text-sm font-medium text-foreground">{t("siteId")}</label>
+                <input id="siteId" type="text" required value={siteId} onChange={(e) => setSiteId(e.target.value)} className={inputClass} placeholder={t("siteIdPlaceholder")} />
+              </div>
+              <div>
+                <label htmlFor="apiKey" className="mb-1.5 block text-sm font-medium text-foreground">{t("apiKey")}</label>
+                <input id="apiKey" type="password" required value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={inputClass} placeholder={t("apiKeyPlaceholder")} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+                <div>
+                  <label htmlFor="electricityPrice" className="mb-1.5 block text-sm font-medium text-foreground">{t("electricityPrice")}</label>
+                  <input id="electricityPrice" type="number" step="0.01" min="0" value={electricityPrice} onChange={(e) => setElectricityPrice(e.target.value)} className={inputClass} placeholder={t("electricityPricePlaceholder")} />
+                </div>
+                <div>
+                  <label htmlFor="currency" className="mb-1.5 block text-sm font-medium text-foreground">{t("currency")}</label>
+                  <select id="currency" value={currency} onChange={(e) => setCurrency(e.target.value)} className={inputClass}>
+                    {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </select>
+                </div>
+                <p className="text-xs text-muted-light sm:col-span-2">{t("electricityPriceHint")}</p>
+              </div>
+
+              {portalCredentialsJsx}
+
+              {formError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{formError}</div>}
+              <button type="submit" disabled={formLoading} className="flex w-full items-center justify-center rounded-xl bg-brand px-4 py-3 text-base font-semibold text-white shadow-md shadow-brand/20 transition-all hover:bg-brand-hover hover:shadow-lg disabled:opacity-50">
+                {formLoading ? t("registering") : t("register")}
+              </button>
+            </form>
           </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">{t("provider")}</label>
-            <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-hover px-4 py-2.5 text-muted">SolarEdge</div>
-          </div>
-          {formError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{formError}</div>}
-          <button type="submit" disabled={formLoading} className="flex w-full items-center justify-center rounded-xl bg-brand px-4 py-3 text-base font-semibold text-white shadow-md shadow-brand/20 transition-all hover:bg-brand-hover hover:shadow-lg disabled:opacity-50">
-            {formLoading ? t("registering") : t("register")}
-          </button>
-        </form>
+        )}
       </div>
     );
   }
@@ -146,9 +337,14 @@ export default function SystemPage() {
       </Link>
 
       <div className="mb-8 flex items-start justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">{system.system_name}</h1>
-          <p className="mt-1 text-sm text-muted">SolarEdge · Site ID: {system.site_id}</p>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-border">
+            <SolarEdgeIcon className="h-6 w-6" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">{system.system_name}</h1>
+            <p className="mt-0.5 text-sm text-muted">SolarEdge · Site ID: {system.site_id}</p>
+          </div>
         </div>
         {!editing && (
           <div className="flex gap-2">
@@ -161,7 +357,10 @@ export default function SystemPage() {
       {/* Edit form */}
       {editing && (
         <div className="mb-8 rounded-2xl border border-border bg-surface p-6">
-          <h2 className="mb-4 text-lg font-semibold text-foreground">{t("editSystem")}</h2>
+          <div className="mb-4 flex items-center gap-3">
+            <SolarEdgeIcon className="h-5 w-5" />
+            <h2 className="text-lg font-semibold text-foreground">{t("editSystem")}</h2>
+          </div>
           <div className="mb-4"><SolarEdgeInstructions /></div>
           <form onSubmit={handleUpdate} className="space-y-4">
             <div>
@@ -189,10 +388,18 @@ export default function SystemPage() {
               </div>
               <p className="text-xs text-muted-light sm:col-span-2">{t("electricityPriceHint")}</p>
             </div>
+
+            {portalCredentialsJsx}
+
             {formError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{formError}</div>}
             <div className="flex gap-3">
               <button type="submit" disabled={formLoading} className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50">{formLoading ? t("saving") : t("save")}</button>
-              <button type="button" onClick={() => { setEditing(false); setFormError(null); setSystemName(system.system_name); setSiteId(system.site_id); setApiKey(system.api_key); setElectricityPrice(system.electricity_price_per_kwh?.toString() ?? ""); setCurrency(system.currency ?? "ILS"); }}
+              <button type="button" onClick={() => {
+                setEditing(false); setFormError(null);
+                setSystemName(system.system_name); setSiteId(system.site_id); setApiKey(system.api_key);
+                setElectricityPrice(system.electricity_price_per_kwh?.toString() ?? ""); setCurrency(system.currency ?? "ILS");
+                setPortalUsername(""); setPortalPassword(""); setPortalOpen(false);
+              }}
                 className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-hover">{t("cancelEdit")}</button>
             </div>
           </form>
@@ -211,7 +418,10 @@ export default function SystemPage() {
               </div>
               <div>
                 <dt className="text-sm text-muted">{t("provider")}</dt>
-                <dd className="mt-1 font-medium text-foreground">SolarEdge</dd>
+                <dd className="mt-1 flex items-center gap-2 font-medium text-foreground">
+                  <SolarEdgeIcon className="h-4 w-4" />
+                  SolarEdge
+                </dd>
               </div>
               <div>
                 <dt className="text-sm text-muted">{t("siteId")}</dt>
@@ -232,6 +442,30 @@ export default function SystemPage() {
                 <dd className="mt-1 font-medium text-foreground">{new Date(system.created_at).toLocaleDateString()}</dd>
               </div>
             </dl>
+          </div>
+
+          {/* Enhanced monitoring status */}
+          <div className="rounded-2xl border border-border bg-surface p-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-light">
+                <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">{t("enhancedMonitoring")}</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {portalConfigured
+                    ? t("portalConnected", { username: portalSavedUser ?? "" })
+                    : t("portalNotConfigured")}
+                </p>
+              </div>
+              {portalConfigured && (
+                <svg className="ms-auto h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+            </div>
           </div>
 
           {(system.peak_power_kwp || system.latitude) && (
