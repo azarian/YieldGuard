@@ -38,6 +38,10 @@ yarn-error.log*
 .venv/
 __pycache__/
 
+# supabase local
+supabase/.branches
+supabase/.temp
+
 # vercel
 .vercel
 
