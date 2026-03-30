@@ -16,6 +16,18 @@ interface SolarSystem {
   se_portal_username: string | null;
 }
 
+interface EquipmentItem {
+  id: string;
+  serial_number: string;
+  equipment_type: string;
+  name: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  earliest_data: string | null;
+  latest_data: string | null;
+  has_data: boolean;
+}
+
 const CURRENCIES: { code: string; symbol: string; label: string }[] = [
   { code: "ILS", symbol: "₪", label: "₪ ILS" },
   { code: "USD", symbol: "$", label: "$ USD" },
@@ -53,6 +65,11 @@ export default function SystemPage() {
   const [portalConfigured, setPortalConfigured] = useState(false);
   const [portalSavedUser, setPortalSavedUser] = useState<string | null>(null);
 
+  // Equipment inventory (collapsible)
+  const [equipmentOpen, setEquipmentOpen] = useState(false);
+  const [equipmentList, setEquipmentList] = useState<EquipmentItem[]>([]);
+  const [equipmentLoaded, setEquipmentLoaded] = useState(false);
+
   const fetchSystem = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -75,6 +92,18 @@ export default function SystemPage() {
   }, [supabase]);
 
   useEffect(() => { fetchSystem(); }, [fetchSystem]);
+
+  useEffect(() => {
+    if (equipmentOpen && !equipmentLoaded) {
+      fetch("/api/solar/sync/inventory")
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.equipment) setEquipmentList(json.equipment);
+          setEquipmentLoaded(true);
+        })
+        .catch(() => setEquipmentLoaded(true));
+    }
+  }, [equipmentOpen, equipmentLoaded]);
 
   async function savePortalCredentials(systemId: string) {
     if (!portalUsername || !portalPassword) return;
@@ -505,6 +534,110 @@ export default function SystemPage() {
             <p className="text-sm text-muted">
               {system.last_synced_at ? t("lastSynced", { date: new Date(system.last_synced_at).toLocaleString() }) : t("neverSynced")}
             </p>
+          </div>
+
+          {/* Collapsible Equipment Inventory */}
+          <div className="rounded-2xl border border-border bg-surface">
+            <button
+              type="button"
+              onClick={() => setEquipmentOpen(!equipmentOpen)}
+              className="flex w-full items-center justify-between p-5 text-start"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-light">
+                  <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{t("equipmentInventory")}</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {equipmentOpen ? t("hideEquipment") : t("showEquipment")}
+                  </p>
+                </div>
+              </div>
+              <svg
+                className={`h-5 w-5 text-muted transition-transform ${equipmentOpen ? "rotate-180" : ""}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {equipmentOpen && (
+              <div className="border-t border-border px-5 pb-5 pt-4">
+                {!equipmentLoaded ? (
+                  <div className="flex items-center gap-2 py-4">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                    <span className="text-sm text-muted">Loading...</span>
+                  </div>
+                ) : equipmentList.length === 0 ? (
+                  <p className="text-sm text-muted">{t("noEquipmentSystem")}</p>
+                ) : (
+                  <div className="space-y-4">
+                    {(() => {
+                      const inverters = equipmentList.filter((e) => e.equipment_type === "inverter");
+                      const optimizers = equipmentList.filter((e) => e.equipment_type === "optimizer");
+                      return (
+                        <>
+                          {inverters.length > 0 && (
+                            <div>
+                              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Inverters</h3>
+                              <div className="space-y-2">
+                                {inverters.map((eq) => (
+                                  <div key={eq.id} className="flex items-center justify-between rounded-xl border border-border p-3">
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{eq.name || eq.serial_number}</p>
+                                      <p className="text-xs text-muted">{eq.manufacturer} {eq.model}</p>
+                                    </div>
+                                    <div className="text-end">
+                                      {eq.has_data ? (
+                                        <p className="text-xs font-medium text-accent">
+                                          {new Date(eq.earliest_data!).toLocaleDateString()} — {new Date(eq.latest_data!).toLocaleDateString()}
+                                        </p>
+                                      ) : (
+                                        <p className="text-xs text-muted-light">No data</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {optimizers.length > 0 && (
+                            <div>
+                              <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
+                                <SolarEdgeIcon className="h-4 w-4" />
+                                Optimizers ({optimizers.length})
+                              </h3>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {optimizers.map((eq) => (
+                                  <div key={eq.id} className="flex items-center justify-between rounded-xl border border-border p-3">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-sm font-medium text-foreground">{eq.name || eq.serial_number}</p>
+                                      <p className="text-xs text-muted">{eq.serial_number}</p>
+                                    </div>
+                                    <div className="ms-2 text-end">
+                                      {eq.has_data ? (
+                                        <span className="inline-block rounded-full bg-accent-light px-2 py-0.5 text-[10px] font-semibold text-accent">
+                                          {new Date(eq.earliest_data!).toLocaleDateString()} — {new Date(eq.latest_data!).toLocaleDateString()}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-muted-light">No data</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

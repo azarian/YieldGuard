@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { computeGaps } from "@/lib/sync-periods";
 import { NextRequest, NextResponse } from "next/server";
 
 const SOLAREDGE_BASE = "https://monitoringapi.solaredge.com";
@@ -41,7 +42,6 @@ export async function POST(request: NextRequest) {
   const apiKey = system.api_key.trim();
   const systemId = system.id;
 
-  // Parse optional body parameters (date range only)
   let dateFrom: string | null = null;
   let dateTo: string | null = null;
 
@@ -50,15 +50,16 @@ export async function POST(request: NextRequest) {
     if (body.date_from) dateFrom = body.date_from;
     if (body.date_to) dateTo = body.date_to;
   } catch {
-    // No body or invalid JSON — use defaults
+    // No body
   }
 
   try {
-    // Check for an existing running or paused job
+    // Check for existing running job
     const { data: existingJobs } = await supabase
       .from("sync_jobs")
       .select("id, status, total_chunks, completed_chunks, current_equipment, current_period, updated_at")
       .eq("system_id", systemId)
+      .not("current_equipment", "ilike", "%optimizer%")
       .in("status", ["running", "paused"])
       .order("created_at", { ascending: false })
       .limit(1);
@@ -79,13 +80,6 @@ export async function POST(request: NextRequest) {
             updated_at: new Date().toISOString(),
           })
           .eq("id", job.id);
-
-        if (finalStatus === "complete") {
-          await supabase
-            .from("solar_systems")
-            .update({ last_synced_at: new Date().toISOString() })
-            .eq("id", systemId);
-        }
       } else {
         return NextResponse.json({
           job_id: job.id,
@@ -118,7 +112,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update site details
     let installationDate: string | null = null;
     if (detailsRes.ok && detailsData?.details) {
       const d = detailsData.details;
@@ -137,7 +130,6 @@ export async function POST(request: NextRequest) {
         .eq("id", systemId);
     }
 
-    // Upsert inverters from equipment list
     const reporters: Array<{
       serialNumber: string;
       name: string;
@@ -178,7 +170,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine date range
+    // Determine desired date range
     const today = new Date();
     let startFrom = new Date();
     startFrom.setFullYear(startFrom.getFullYear() - 7);
@@ -190,20 +182,19 @@ export async function POST(request: NextRequest) {
 
     if (dateFrom) {
       const userStart = new Date(dateFrom);
-      if (!isNaN(userStart.getTime()) && userStart > startFrom) {
-        startFrom = userStart;
-      }
+      if (!isNaN(userStart.getTime())) startFrom = userStart;
     }
 
     let endAt = today;
     if (dateTo) {
       const userEnd = new Date(dateTo);
-      if (!isNaN(userEnd.getTime()) && userEnd < today) {
-        endAt = userEnd;
-      }
+      if (!isNaN(userEnd.getTime()) && userEnd < today) endAt = userEnd;
     }
 
-    // For each equipment, find the latest data we already have and create chunks
+    const desiredStartStr = formatDate(startFrom);
+    const desiredEndStr = formatDate(endAt);
+
+    // Build chunks using gap analysis against fetched_periods
     const chunks: Array<{
       equipment_id: string;
       period_start: string;
@@ -211,33 +202,34 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const equip of dbEquipment) {
-      let chunkStart = new Date(startFrom);
-
-      const { data: latestRows } = await supabase
-        .from("equipment_telemetry")
-        .select("ts")
+      const { data: fetchedPeriods } = await supabase
+        .from("fetched_periods")
+        .select("period_start, period_end")
         .eq("equipment_id", equip.id)
-        .order("ts", { ascending: false })
-        .limit(1);
+        .eq("source", "public_api")
+        .order("period_start", { ascending: true });
 
-      if (latestRows && latestRows.length > 0) {
-        const latestTs = new Date(latestRows[0].ts);
-        const resumeStart = addDays(latestTs, -1);
-        if (resumeStart > chunkStart) {
-          chunkStart = resumeStart;
-        }
-      }
+      const gaps = computeGaps(
+        desiredStartStr,
+        desiredEndStr,
+        fetchedPeriods ?? []
+      );
 
       const chunkSize = 7;
-      while (chunkStart < endAt) {
-        const chunkEnd = addDays(chunkStart, chunkSize);
-        const clampedEnd = chunkEnd > endAt ? endAt : chunkEnd;
-        chunks.push({
-          equipment_id: equip.id,
-          period_start: formatDate(chunkStart),
-          period_end: formatDate(clampedEnd),
-        });
-        chunkStart = clampedEnd;
+      for (const gap of gaps) {
+        let cursor = new Date(gap.start + "T00:00:00Z");
+        const gapEnd = new Date(gap.end + "T00:00:00Z");
+
+        while (cursor < gapEnd) {
+          const chunkEnd = addDays(cursor, chunkSize);
+          const clamped = chunkEnd > gapEnd ? gapEnd : chunkEnd;
+          chunks.push({
+            equipment_id: equip.id,
+            period_start: formatDate(cursor),
+            period_end: formatDate(clamped),
+          });
+          cursor = clamped;
+        }
       }
     }
 
@@ -263,6 +255,7 @@ export async function POST(request: NextRequest) {
         status: "running",
         total_chunks: chunks.length,
         completed_chunks: 0,
+        current_equipment: "inverter sync",
       })
       .select()
       .single();

@@ -222,6 +222,14 @@ export async function POST(request: NextRequest) {
       .update({ status: "done" })
       .eq("id", chunk.id);
 
+    // Record the fetched period so we never re-fetch this range
+    await supabase.from("fetched_periods").insert({
+      equipment_id: chunk.equipment_id,
+      source: "public_api",
+      period_start: chunk.period_start,
+      period_end: chunk.period_end,
+    });
+
     const newCompleted = job.completed_chunks + 1;
     await supabase
       .from("sync_jobs")

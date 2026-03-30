@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { decrypt } from "@/lib/crypto";
+import { computeGaps } from "@/lib/sync-periods";
 import { NextRequest, NextResponse } from "next/server";
 
 const PY_BASE =
@@ -195,7 +196,7 @@ export async function POST(request: NextRequest) {
     // Determine date range
     const today = new Date();
     let startFrom = new Date();
-    startFrom.setFullYear(startFrom.getFullYear() - 1); // 1 year for optimizer backfill
+    startFrom.setFullYear(startFrom.getFullYear() - 1);
 
     if (system.installation_date) {
       const instDate = new Date(system.installation_date);
@@ -204,20 +205,19 @@ export async function POST(request: NextRequest) {
 
     if (dateFrom) {
       const userStart = new Date(dateFrom);
-      if (!isNaN(userStart.getTime()) && userStart > startFrom) {
-        startFrom = userStart;
-      }
+      if (!isNaN(userStart.getTime())) startFrom = userStart;
     }
 
     let endAt = today;
     if (dateTo) {
       const userEnd = new Date(dateTo);
-      if (!isNaN(userEnd.getTime()) && userEnd < today) {
-        endAt = userEnd;
-      }
+      if (!isNaN(userEnd.getTime()) && userEnd < today) endAt = userEnd;
     }
 
-    // Create 1-day chunks per optimizer for max resolution
+    const desiredStartStr = formatDate(startFrom);
+    const desiredEndStr = formatDate(endAt);
+
+    // Create 1-day chunks only for unfetched gaps
     const chunks: Array<{
       equipment_id: string;
       period_start: string;
@@ -228,31 +228,31 @@ export async function POST(request: NextRequest) {
       const internalId = snToInternalId.get(dbOpt.serial_number);
       if (!internalId) continue;
 
-      let chunkStart = new Date(startFrom);
-
-      // Check for existing data to resume
-      const { data: latestRows } = await supabase
-        .from("equipment_telemetry")
-        .select("ts")
+      const { data: fetchedPeriods } = await supabase
+        .from("fetched_periods")
+        .select("period_start, period_end")
         .eq("equipment_id", dbOpt.id)
-        .order("ts", { ascending: false })
-        .limit(1);
+        .eq("source", "portal_api")
+        .order("period_start", { ascending: true });
 
-      if (latestRows && latestRows.length > 0) {
-        const latestTs = new Date(latestRows[0].ts);
-        const resumeStart = addDays(latestTs, -1);
-        if (resumeStart > chunkStart) {
-          chunkStart = resumeStart;
+      const gaps = computeGaps(
+        desiredStartStr,
+        desiredEndStr,
+        fetchedPeriods ?? []
+      );
+
+      for (const gap of gaps) {
+        let cursor = new Date(gap.start + "T00:00:00Z");
+        const gapEnd = new Date(gap.end + "T00:00:00Z");
+
+        while (cursor < gapEnd) {
+          chunks.push({
+            equipment_id: dbOpt.id,
+            period_start: formatDate(cursor),
+            period_end: formatDate(addDays(cursor, 1)),
+          });
+          cursor = addDays(cursor, 1);
         }
-      }
-
-      while (chunkStart < endAt) {
-        chunks.push({
-          equipment_id: dbOpt.id,
-          period_start: formatDate(chunkStart),
-          period_end: formatDate(addDays(chunkStart, 1)),
-        });
-        chunkStart = addDays(chunkStart, 1);
       }
     }
 
