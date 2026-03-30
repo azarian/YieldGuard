@@ -4,6 +4,7 @@ SolarEdge API data fetching with CSV caching.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from datetime import date, timedelta
@@ -11,11 +12,13 @@ from datetime import date, timedelta
 import pandas as pd
 import requests
 
-from config import SolarEdgeConfig, DEFAULT_SOLAREDGE
+from config import SolarEdgeConfig
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_15min_energy(
-    config: SolarEdgeConfig = DEFAULT_SOLAREDGE,
+    config: SolarEdgeConfig,
     start: str | date = "2020-02-02",
     end: str | date = "2026-03-24",
     cache_path: str | None = None,
@@ -33,16 +36,16 @@ def fetch_15min_energy(
         )
 
     if os.path.exists(cache_path):
-        print(f"Loading cached 15-min data from {cache_path}...")
+        logger.info("Loading cached 15-min data from %s", cache_path)
         df = pd.read_csv(cache_path, parse_dates=["timestamp"])
         last_cached = df["timestamp"].max().date()
         end_date = pd.Timestamp(str(end)).date()
         if last_cached >= end_date - timedelta(days=1):
             df["date"] = df["timestamp"].dt.date
-            print(f"  {len(df)} records, {df['date'].nunique()} days")
+            logger.info("%d records, %d days", len(df), df["date"].nunique())
             return df
         else:
-            print(f"  Cache ends at {last_cached}, fetching to {end_date}...")
+            logger.info("Cache ends at %s, fetching to %s", last_cached, end_date)
             start = str(last_cached + timedelta(days=1))
             existing = df
     else:
@@ -69,10 +72,7 @@ def fetch_15min_energy(
         req_start = max(cursor, start_date)
 
         month_i += 1
-        print(
-            f"  Fetching {req_start} to {month_end} ({month_i}/{total_months})...",
-            end="\r",
-        )
+        logger.debug("Fetching %s to %s (%d/%d)", req_start, month_end, month_i, total_months)
 
         for attempt in range(3):
             try:
@@ -104,7 +104,7 @@ def fetch_15min_energy(
 
         cursor = next_month_1st
 
-    print(f"  Fetched {len(all_records)} non-null records from {total_months} months")
+    logger.info("Fetched %d non-null records from %d months", len(all_records), total_months)
 
     new_df = pd.DataFrame(all_records)
     if existing is not None:
@@ -118,8 +118,8 @@ def fetch_15min_energy(
         df = new_df.sort_values("timestamp").reset_index(drop=True)
 
     df.to_csv(cache_path, index=False)
-    print(f"  Cached to {cache_path}")
+    logger.info("Cached to %s", cache_path)
 
     df["date"] = df["timestamp"].dt.date
-    print(f"  {len(df)} records, {df['date'].nunique()} days")
+    logger.info("%d records, %d days", len(df), df["date"].nunique())
     return df

@@ -4,6 +4,7 @@ Weather data fetching (Open-Meteo) with CSV caching.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import timedelta
 
@@ -11,6 +12,8 @@ import pandas as pd
 import requests
 
 from config import SystemConfig, DEFAULT_SYSTEM
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_precipitation(
@@ -81,5 +84,5 @@ def fetch_precipitation(
         df = new_df
 
     df.to_csv(cache_path, index=False)
-    print(f"Precipitation: {len(df)} days, {(df['rain_mm'] > 0.5).sum()} rain days")
+    logger.info("Precipitation: %d days, %d rain days", len(df), (df["rain_mm"] > 0.5).sum())
     return df

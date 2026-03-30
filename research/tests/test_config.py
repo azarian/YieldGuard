@@ -3,7 +3,7 @@
 import pytest
 from datetime import date
 
-from config import SystemConfig, SolarEdgeConfig, ClearDayResult, DEFAULT_SYSTEM, DEFAULT_SOLAREDGE
+from config import SystemConfig, SolarEdgeConfig, ClearDayResult, DEFAULT_SYSTEM
 
 
 class TestSystemConfig:
@@ -45,7 +45,7 @@ class TestSolarEdgeConfig:
         assert cfg.site_id == "123"
 
     def test_frozen(self):
-        cfg = DEFAULT_SOLAREDGE
+        cfg = SolarEdgeConfig(site_id="123", api_key="abc")
         with pytest.raises(AttributeError):
             cfg.site_id = "new"  # type: ignore
 

@@ -4,6 +4,7 @@ HTML report generation from pre-computed charts and data.
 
 from __future__ import annotations
 
+import logging
 import os
 
 import numpy as np
@@ -12,6 +13,8 @@ import plotly.graph_objects as go
 
 from config import SystemConfig
 from reporting.charts import build_all_charts
+
+logger = logging.getLogger(__name__)
 
 
 def build_report(
@@ -137,5 +140,5 @@ table.t tr:hover{{background:#e3f2fd}}
     html += '</body></html>'
     with open(path, "w") as f:
         f.write(html)
-    print(f"Report: {path}")
+    logger.info("Report: %s", path)
     return path

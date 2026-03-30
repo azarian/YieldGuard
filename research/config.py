@@ -7,9 +7,13 @@ No dependencies on any other YieldGuard module.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
+
+import numpy as np
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -68,7 +72,51 @@ DEFAULT_SYSTEM = SystemConfig(
     clean_cost=350,
 )
 
-DEFAULT_SOLAREDGE = SolarEdgeConfig(
-    site_id="1353684",
-    api_key="9AMEDLLW9UST1HA7849YYIF9JQK1UJN8",
-)
+def load_solaredge_config() -> SolarEdgeConfig:
+    """Load SolarEdge config from environment variables."""
+    site_id = os.environ.get("SOLAREDGE_SITE_ID", "")
+    api_key = os.environ.get("SOLAREDGE_API_KEY", "")
+    if not site_id or not api_key:
+        raise ValueError(
+            "SOLAREDGE_SITE_ID and SOLAREDGE_API_KEY environment variables must be set"
+        )
+    return SolarEdgeConfig(site_id=site_id, api_key=api_key)
+
+
+@dataclass(frozen=True)
+class SoilingSummary:
+    """Summary statistics from a soiling analysis run."""
+
+    current_sr: float
+    current_loss_pct: float
+    total_lost_kwh: float
+    total_lost_money: float
+    annual_avg_loss_money: float
+    n_cleaning_events: int
+    loss_since_last_clean: float
+    avg_summer_rate: float  # %/day
+    avg_winter_rate: float  # %/day
+    analysis_start: date
+    analysis_end: date
+    n_days: int
+
+
+@dataclass
+class SoilingResult:
+    """Complete result of a soiling analysis run.
+
+    Attributes:
+        daily: Full daily DataFrame with soiling ratios, losses, events
+        summary: Aggregated summary statistics
+        events: DataFrame of detected cleaning events only
+        envelope: Seasonal envelope Series (DOY → kWh)
+        envelope_params: Fitted curve parameters (7 values)
+        config: System configuration used for the analysis
+    """
+
+    daily: pd.DataFrame
+    summary: SoilingSummary
+    events: pd.DataFrame
+    envelope: pd.Series
+    envelope_params: np.ndarray
+    config: SystemConfig

@@ -7,6 +7,7 @@ to classify days as clear, partial, or cloudy.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import date
 
@@ -15,6 +16,8 @@ import pandas as pd
 
 from config import SystemConfig, ClearDayResult, DEFAULT_SYSTEM
 from models.clearsky import ClearSkyModel
+
+logger = logging.getLogger(__name__)
 
 
 class ClearDayDetector(ABC):
@@ -46,12 +49,12 @@ class ClearDayDetector(ABC):
         dates = sorted(energy_15min["date"].unique())
         for i, day in enumerate(dates):
             if i % 100 == 0:
-                print(f"  Classifying: {i}/{len(dates)}...", end="\r")
+                logger.debug("Classifying: %d/%d...", i, len(dates))
             day_data = energy_15min[energy_15min["date"] == day].copy()
             rain = precip_map.get(day, 0.0)
             results.append(self.classify_day(day, day_data, rain))
 
-        print(f"  Classifying: done ({len(dates)} days)    ")
+        logger.info("Classified %d days", len(dates))
         results = self._apply_baseline_scale(results)
         return results
 

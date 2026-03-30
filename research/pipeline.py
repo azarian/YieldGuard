@@ -7,12 +7,13 @@ generates reports and JSON output.
 """
 
 import json
+import logging
 import os
 
 import numpy as np
 import pandas as pd
 
-from config import DEFAULT_SYSTEM, DEFAULT_SOLAREDGE
+from config import DEFAULT_SYSTEM, load_solaredge_config
 from data.solaredge import fetch_15min_energy
 from data.weather import fetch_precipitation
 from models.seasonal import fit_seasonal_envelope
@@ -24,8 +25,10 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     config = DEFAULT_SYSTEM
-    se_config = DEFAULT_SOLAREDGE
+    se_config = load_solaredge_config()
 
     print("=" * 60)
     print("YieldGuard \u2014 Full Historical Analysis (6 years)")

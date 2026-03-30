@@ -8,8 +8,12 @@ thresholds and requires sustained recovery to filter out noise.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def detect_cleaning(daily: pd.DataFrame) -> pd.DataFrame:
@@ -42,7 +46,7 @@ def detect_cleaning(daily: pd.DataFrame) -> pd.DataFrame:
     diffs = clear_sr.diff().dropna().abs()
     noise_mad = diffs.median()
     noise_threshold = noise_mad * 4
-    print(f"  SR noise (MAD): {noise_mad:.4f}, detection threshold: {noise_threshold:.4f}")
+    logger.info("SR noise MAD=%.4f, detection threshold=%.4f", noise_mad, noise_threshold)
 
     # Step 3: Find candidate cleaning events
     candidates = []
@@ -110,7 +114,7 @@ def detect_cleaning(daily: pd.DataFrame) -> pd.DataFrame:
         )
 
     n = daily["cleaning"].sum()
-    print(f"  Cleaning events detected: {n}")
+    logger.info("Cleaning events detected: %d", n)
     return daily
 
 

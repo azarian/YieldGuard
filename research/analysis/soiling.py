@@ -8,11 +8,15 @@ physical constraint that soiling can only worsen during dry periods.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from config import ClearDayResult, SystemConfig
 from analysis.cleaning import detect_cleaning
+
+logger = logging.getLogger(__name__)
 
 
 def build_daily(
@@ -39,11 +43,12 @@ def build_daily(
     daily = daily.merge(precip, on="date", how="left")
     daily["rain_mm"] = daily["rain_mm"].fillna(0)
 
-    print(f"Daily: {len(daily)} days")
-    print(
-        f"  Clear: {daily['is_clear'].sum()}, "
-        f"Partial: {(daily['classification'] == 'partial').sum()}, "
-        f"Cloudy: {(daily['classification'] == 'cloudy').sum()}"
+    logger.info(
+        "Daily: %d days (Clear: %d, Partial: %d, Cloudy: %d)",
+        len(daily),
+        daily["is_clear"].sum(),
+        (daily["classification"] == "partial").sum(),
+        (daily["classification"] == "cloudy").sum(),
     )
     return daily
 
