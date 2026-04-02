@@ -87,6 +87,7 @@ export default function SystemPage() {
       setCurrency(data.currency ?? "ILS");
       setPortalConfigured(!!data.se_portal_username);
       setPortalSavedUser(data.se_portal_username ?? null);
+      if (data.se_portal_username) setPortalUsername(data.se_portal_username);
     }
     setLoading(false);
   }, [supabase]);
