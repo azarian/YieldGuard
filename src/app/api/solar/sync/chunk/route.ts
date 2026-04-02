@@ -1,11 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
+import {
+  getEquipmentData,
+  SolarEdgeRateLimitError,
+  SolarEdgeApiError,
+} from "@/lib/solaredge/client";
 import { NextRequest, NextResponse } from "next/server";
-
-const SOLAREDGE_BASE = "https://monitoringapi.solaredge.com";
-
-function formatDateTime(date: string): string {
-  return `${date} 00:00:00`;
-}
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -111,45 +110,32 @@ export async function POST(request: NextRequest) {
   const serial = equipment.serial_number;
 
   try {
-    let telemetries: Array<Record<string, unknown>> = [];
+    let telemetries;
 
-    const startTime = encodeURIComponent(formatDateTime(chunk.period_start));
-    const endTime = encodeURIComponent(formatDateTime(chunk.period_end));
-    const telemetryUrl = `${SOLAREDGE_BASE}/equipment/${siteId}/${serial}/data?startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
+    try {
+      telemetries = await getEquipmentData(
+        siteId, serial, apiKey,
+        chunk.period_start, chunk.period_end,
+      );
+    } catch (err) {
+      if (err instanceof SolarEdgeRateLimitError) {
+        await supabase
+          .from("sync_jobs")
+          .update({ status: "paused", updated_at: new Date().toISOString() })
+          .eq("id", jobId);
 
-    const telemetryRes = await fetch(telemetryUrl);
+        return NextResponse.json({
+          status: "rate_limited",
+          retry_after: err.retryAfterSeconds,
+          total_chunks: job.total_chunks,
+          completed_chunks: job.completed_chunks,
+        });
+      }
 
-    if (telemetryRes.status === 429) {
-      const retryAfter = telemetryRes.headers.get("Retry-After");
-      const waitSeconds = retryAfter ? parseInt(retryAfter, 10) : 60;
-
-      await supabase
-        .from("sync_jobs")
-        .update({ status: "paused", updated_at: new Date().toISOString() })
-        .eq("id", jobId);
-
-      return NextResponse.json({
-        status: "rate_limited",
-        retry_after: waitSeconds,
-        total_chunks: job.total_chunks,
-        completed_chunks: job.completed_chunks,
-      });
-    }
-
-    if (telemetryRes.ok) {
-      const telemetryData = await telemetryRes.json();
-      telemetries =
-        telemetryData?.data?.telemetries ?? telemetryData?.telemetries ?? [];
-    }
-
-    if (!telemetryRes.ok && telemetries.length === 0) {
-      const errorBody = await telemetryRes.text().catch(() => "");
+      const errMsg = err instanceof SolarEdgeApiError ? err.message : String(err);
       await supabase
         .from("sync_chunks")
-        .update({
-          status: "error",
-          error_message: `HTTP ${telemetryRes.status}: ${errorBody.substring(0, 200)}`,
-        })
+        .update({ status: "error", error_message: errMsg.substring(0, 200) })
         .eq("id", chunk.id);
 
       const newCompleted = job.completed_chunks + 1;
@@ -169,7 +155,7 @@ export async function POST(request: NextRequest) {
         completed_chunks: newCompleted,
         current_equipment: equipment.name || serial,
         current_period: `${chunk.period_start} → ${chunk.period_end}`,
-        error: `Chunk failed: HTTP ${telemetryRes.status}`,
+        error: `Chunk failed: ${errMsg}`,
       });
     }
 
@@ -185,22 +171,15 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const t of telemetries) {
-      const date = t.date as string | undefined;
-      if (!date) continue;
+      if (!t.date) continue;
       rows.push({
         equipment_id: chunk.equipment_id,
-        ts: date,
-        power_w:
-          (t.totalActivePower as number) ??
-          (t.activePower as number) ??
-          (t.power as number) ??
-          null,
-        voltage:
-          (t.dcVoltage as number) ?? (t.voltage as number) ?? null,
-        current_a: (t.current as number) ?? null,
-        energy_wh:
-          (t.totalEnergy as number) ?? (t.energy as number) ?? null,
-        temperature_c: (t.temperature as number) ?? null,
+        ts: t.date,
+        power_w: t.totalActivePower ?? t.activePower ?? t.power ?? null,
+        voltage: t.dcVoltage ?? t.voltage ?? null,
+        current_a: t.current ?? null,
+        energy_wh: t.totalEnergy ?? t.energy ?? null,
+        temperature_c: t.temperature ?? null,
       });
     }
 

@@ -1,8 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { getSiteDetails, getEquipmentList } from "@/lib/solaredge/client";
 import { computeGaps } from "@/lib/sync-periods";
 import { NextRequest, NextResponse } from "next/server";
-
-const SOLAREDGE_BASE = "https://monitoringapi.solaredge.com";
 
 function formatDate(date: Date): string {
   return date.toISOString().split("T")[0];
@@ -94,50 +93,30 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch site details and equipment list
-    const detailsUrl = `${SOLAREDGE_BASE}/site/${siteId}/details?api_key=${apiKey}`;
-    const equipmentUrl = `${SOLAREDGE_BASE}/equipment/${siteId}/list?api_key=${apiKey}`;
-
-    const [detailsRes, equipmentRes] = await Promise.all([
-      fetch(detailsUrl),
-      fetch(equipmentUrl),
+    const [detailsData, equipmentData] = await Promise.all([
+      getSiteDetails(siteId, apiKey).catch(() => null),
+      getEquipmentList(siteId, apiKey),
     ]);
 
-    const detailsData = await detailsRes.json().catch(() => null);
-    const equipmentData = await equipmentRes.json().catch(() => null);
-
-    if (!equipmentRes.ok || !equipmentData) {
-      return NextResponse.json(
-        { error: `Failed to fetch equipment list: ${equipmentRes.status}` },
-        { status: 502 }
-      );
-    }
-
     let installationDate: string | null = null;
-    if (detailsRes.ok && detailsData?.details) {
+    if (detailsData?.details) {
       const d = detailsData.details;
       const loc = d.location ?? {};
-      installationDate = d.installationDate ?? null;
+      installationDate = (d.installationDate as string) ?? null;
       await supabase
         .from("solar_systems")
         .update({
           latitude: loc.latitude ?? null,
           longitude: loc.longitude ?? null,
-          peak_power_kwp: d.peakPower ?? null,
-          azimuth: d.azimuth ?? null,
-          tilt: d.tilt ?? null,
+          peak_power_kwp: (d.peakPower as number) ?? null,
+          azimuth: (d.azimuth as number) ?? null,
+          tilt: (d.tilt as number) ?? null,
           installation_date: installationDate,
         })
         .eq("id", systemId);
     }
 
-    const reporters: Array<{
-      serialNumber: string;
-      name: string;
-      manufacturer: string;
-      model: string;
-      type: string;
-      connectedTo?: string;
-    }> = equipmentData.reporters?.list ?? [];
+    const reporters = equipmentData.reporters?.list ?? [];
 
     const equipmentRows = reporters.map((r) => ({
       system_id: systemId,
