@@ -31,108 +31,198 @@ interface InventoryData {
   portal_username: string | null;
 }
 
-interface FetchedPeriod {
-  start: string;
-  end: string;
+interface Period { start: string; end: string }
+
+interface CoverageData {
+  fetched: Period[];
+  missing: Period[];
 }
 
 interface PeriodsData {
   installation_date: string | null;
-  inverter: { periods: FetchedPeriod[]; count: number };
-  optimizer: { periods: FetchedPeriod[]; count: number };
+  inverter: CoverageData & { count: number };
+  optimizer: CoverageData & { count: number };
+  site_energy: CoverageData;
 }
 
 type SyncState = "idle" | "starting" | "running" | "rate_limited" | "complete" | "error";
 
-/* ── Timeline Component ──────────────────────────────────────────────────── */
+/* ── Coverage Timeline ───────────────────────────────────────────────────── */
 
 function CoverageTimeline({
-  label,
-  icon,
-  periods,
-  installDate,
-  count,
+  fetched, missing, installDate,
 }: {
-  label: string;
-  icon: React.ReactNode;
-  periods: FetchedPeriod[];
+  fetched: Period[];
+  missing: Period[];
   installDate: string | null;
-  count: number;
 }) {
   const t = useTranslations("sync");
-
-  if (count === 0) return null;
-
   const today = new Date().toISOString().split("T")[0];
   const start = installDate ?? "2020-01-01";
-  const totalMs = new Date(today).getTime() - new Date(start).getTime();
+  const rangeStartMs = new Date(start).getTime();
+  const rangeEndMs = new Date(today).getTime();
+  const totalMs = rangeEndMs - rangeStartMs;
   const totalDays = Math.max(1, Math.ceil(totalMs / 86400000));
 
-  let fetchedDays = 0;
-  for (const p of periods) {
-    const ms = new Date(p.end).getTime() - new Date(p.start).getTime();
-    fetchedDays += Math.max(1, Math.ceil(ms / 86400000));
+  function countDays(periods: Period[]): number {
+    let days = 0;
+    for (const p of periods) {
+      const pStart = Math.max(new Date(p.start).getTime(), rangeStartMs);
+      const pEnd = Math.min(new Date(p.end).getTime(), rangeEndMs);
+      if (pEnd > pStart) days += Math.ceil((pEnd - pStart) / 86400000);
+    }
+    return days;
   }
-  const gapDays = Math.max(0, totalDays - fetchedDays);
-  const pct = totalDays > 0 ? Math.round((fetchedDays / totalDays) * 100) : 0;
+
+  const fetchedDays = countDays(fetched);
+  const missingDays = countDays(missing);
+  const coveredDays = fetchedDays + missingDays;
+  const remainingDays = Math.max(0, totalDays - coveredDays);
+  const pct = totalDays > 0 ? Math.min(100, Math.round((coveredDays / totalDays) * 100)) : 0;
 
   function positionPct(dateStr: string): number {
-    const ms = new Date(dateStr).getTime() - new Date(start).getTime();
+    const ms = new Date(dateStr).getTime() - rangeStartMs;
     return Math.max(0, Math.min(100, (ms / totalMs) * 100));
   }
 
-  return (
-    <div className="rounded-xl border border-border bg-background p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="text-sm font-semibold text-foreground">{label}</span>
-        </div>
-        <div className="flex items-center gap-3 text-xs">
-          {periods.length > 0 ? (
-            <>
-              <span className="flex items-center gap-1 text-accent">
-                <span className="inline-block h-2.5 w-2.5 rounded-sm bg-accent" />
-                {t("totalDaysFetched", { count: fetchedDays })}
-              </span>
-              {gapDays > 0 && (
-                <span className="flex items-center gap-1 text-muted">
-                  <span className="inline-block h-2.5 w-2.5 rounded-sm bg-border-light" />
-                  {t("totalDaysGap", { count: gapDays })}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-muted">{t("noPeriodsYet")}</span>
-          )}
-        </div>
-      </div>
+  const hasPeriods = fetched.length > 0 || missing.length > 0;
 
-      {/* Timeline bar */}
-      <div className="relative h-6 overflow-hidden rounded-full bg-border-light">
-        {periods.map((p, i) => {
+  return (
+    <div>
+      <div className="relative h-5 overflow-hidden rounded-full bg-border-light">
+        {fetched.map((p, i) => {
           const left = positionPct(p.start);
           const right = positionPct(p.end);
           const width = Math.max(0.5, right - left);
           return (
-            <div
-              key={i}
-              className="absolute inset-y-0 rounded-full bg-accent/70 transition-all"
+            <div key={`f${i}`} className="absolute inset-y-0 rounded-full bg-accent/70"
               style={{ left: `${left}%`, width: `${width}%` }}
-              title={`${p.start} → ${p.end}`}
-            />
+              title={`${t("fetchedLabel")}: ${p.start} → ${p.end}`} />
+          );
+        })}
+        {missing.map((p, i) => {
+          const left = positionPct(p.start);
+          const right = positionPct(p.end);
+          const width = Math.max(0.5, right - left);
+          return (
+            <div key={`m${i}`} className="absolute inset-y-0 rounded-full bg-muted-light/50"
+              style={{ left: `${left}%`, width: `${width}%`, backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 6px)" }}
+              title={`${t("missingLabel")}: ${p.start} → ${p.end}`} />
           );
         })}
       </div>
-
-      {/* Date labels */}
       <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-light">
         <span>{start}</span>
         <span className="font-semibold text-muted">{pct}%</span>
         <span>{today}</span>
       </div>
+      <div className="mt-1 flex flex-wrap gap-3 text-xs">
+        {hasPeriods ? (
+          <>
+            {fetchedDays > 0 && (
+              <span className="flex items-center gap-1 text-accent">
+                <span className="inline-block h-2 w-2 rounded-sm bg-accent" />
+                {t("totalDaysFetched", { count: fetchedDays })}
+              </span>
+            )}
+            {missingDays > 0 && (
+              <span className="flex items-center gap-1 text-muted">
+                <span className="inline-block h-2 w-2 rounded-sm bg-muted-light/50" style={{ backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)" }} />
+                {t("totalDaysMissing", { count: missingDays })}
+              </span>
+            )}
+            {remainingDays > 0 && (
+              <span className="flex items-center gap-1 text-muted">
+                <span className="inline-block h-2 w-2 rounded-sm bg-border-light" />
+                {t("totalDaysGap", { count: remainingDays })}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-muted">{t("noPeriodsYet")}</span>
+        )}
+      </div>
     </div>
   );
+}
+
+/* ── Sync Progress ───────────────────────────────────────────────────────── */
+
+function SyncProgress({
+  state, total, completed, equipName, period, rows, countdown,
+  errMsg, label, onStart, onCancel, onDismiss,
+}: {
+  state: SyncState; total: number; completed: number;
+  equipName: string; period: string; rows: number; countdown: number;
+  errMsg: string; label: string;
+  onStart: () => void; onCancel: () => void; onDismiss: () => void;
+}) {
+  const t = useTranslations("sync");
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  if (state === "starting") {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-brand/20 bg-brand-light/20 p-4">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+        <p className="text-sm font-medium text-foreground">
+          {label === "optimizer" ? t("discoveringOptimizers") : label === "site_energy" ? t("siteEnergySyncing") : t("discovering")}
+        </p>
+      </div>
+    );
+  }
+
+  if (state === "running" || state === "rate_limited") {
+    return (
+      <div className="rounded-xl border border-brand/20 bg-brand-light/20 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-foreground">
+            {state === "rate_limited" ? t("rateLimited") : label === "optimizer" ? t("syncingOptimizers") : t("syncing")}
+          </p>
+          <button onClick={onCancel} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("cancel")}</button>
+        </div>
+        <div className="mb-2 h-3 overflow-hidden rounded-full bg-border-light">
+          <div className="h-full rounded-full bg-brand transition-all duration-300" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="flex items-center justify-between text-xs text-muted">
+          <span>{completed}/{total} {t("chunks")} ({pct}%)</span>
+          {rows > 0 && <span>{rows.toLocaleString()} {t("dataPoints")}</span>}
+        </div>
+        {equipName && <p className="mt-2 text-xs text-muted-light">{t("currentItem", { equipment: equipName, period })}</p>}
+        {state === "rate_limited" && countdown > 0 && (
+          <p className="mt-2 text-xs font-medium text-brand">{t("resumingIn", { seconds: countdown })}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (state === "complete") {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-light/20 p-4">
+        <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-foreground">{t("complete")}</p>
+          {rows > 0 && <p className="text-xs text-muted">{t("completeSummary", { count: rows.toLocaleString() })}</p>}
+        </div>
+        <button onClick={onDismiss} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("dismiss")}</button>
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-red-700 dark:text-red-400">{t("error")}</p>
+          <button onClick={onStart} className="rounded-lg bg-brand px-3 py-1 text-xs font-medium text-white hover:bg-brand-hover">{t("retry")}</button>
+        </div>
+        {errMsg && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{errMsg}</p>}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 /* ── Page ─────────────────────────────────────────────────────────────────── */
@@ -144,38 +234,66 @@ export default function SyncPage() {
   const [loading, setLoading] = useState(true);
   const [inventory, setInventory] = useState<InventoryData | null>(null);
   const [periods, setPeriods] = useState<PeriodsData | null>(null);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
 
-  // Inverter sync state
-  const [syncState, setSyncState] = useState<SyncState>("idle");
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [totalChunks, setTotalChunks] = useState(0);
-  const [completedChunks, setCompletedChunks] = useState(0);
-  const [currentEquipment, setCurrentEquipment] = useState("");
-  const [currentPeriod, setCurrentPeriod] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [retryCountdown, setRetryCountdown] = useState(0);
-  const [rowsTotal, setRowsTotal] = useState(0);
-  const cancelledRef = useRef(false);
+  // Inverter sync
+  const [invFrom, setInvFrom] = useState("");
+  const [invTo, setInvTo] = useState("");
+  const [invState, setInvState] = useState<SyncState>("idle");
+  const [invJobId, setInvJobId] = useState<string | null>(null);
+  const [invTotal, setInvTotal] = useState(0);
+  const [invCompleted, setInvCompleted] = useState(0);
+  const [invEquip, setInvEquip] = useState("");
+  const [invPeriod, setInvPeriod] = useState("");
+  const [invError, setInvError] = useState("");
+  const [invRetry, setInvRetry] = useState(0);
+  const [invRows, setInvRows] = useState(0);
+  const invCancelled = useRef(false);
 
-  // Optimizer sync state
-  const [optSyncState, setOptSyncState] = useState<SyncState>("idle");
+  // Site energy sync
+  const [seFrom, setSeFrom] = useState("");
+  const [seTo, setSeTo] = useState("");
+  const [seState, setSeState] = useState<SyncState>("idle");
+  const [seError, setSeError] = useState("");
+  const [seRows, setSeRows] = useState(0);
+
+  // Optimizer sync
+  const [optFrom, setOptFrom] = useState("");
+  const [optTo, setOptTo] = useState("");
+  const [optState, setOptState] = useState<SyncState>("idle");
   const [optJobId, setOptJobId] = useState<string | null>(null);
-  const [optTotalChunks, setOptTotalChunks] = useState(0);
-  const [optCompletedChunks, setOptCompletedChunks] = useState(0);
-  const [optCurrentEquipment, setOptCurrentEquipment] = useState("");
-  const [optCurrentPeriod, setOptCurrentPeriod] = useState("");
-  const [optErrorMsg, setOptErrorMsg] = useState("");
-  const [optRetryCountdown, setOptRetryCountdown] = useState(0);
-  const [optRowsTotal, setOptRowsTotal] = useState(0);
-  const optCancelledRef = useRef(false);
+  const [optTotal, setOptTotal] = useState(0);
+  const [optCompleted, setOptCompleted] = useState(0);
+  const [optEquip, setOptEquip] = useState("");
+  const [optPeriod, setOptPeriod] = useState("");
+  const [optError, setOptError] = useState("");
+  const [optRetry, setOptRetry] = useState(0);
+  const [optRows, setOptRows] = useState(0);
+  const optCancelled = useRef(false);
 
-  // Collapsible history
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [clearing, setClearing] = useState<string | null>(null);
+  const [clearConfirmType, setClearConfirmType] = useState<"inverter" | "site_energy" | "optimizer" | null>(null);
 
-  const pct = totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0;
-  const optPct = optTotalChunks > 0 ? Math.round((optCompletedChunks / optTotalChunks) * 100) : 0;
+  const anySyncing = invState === "running" || invState === "starting" || invState === "rate_limited"
+    || seState === "starting" || optState === "running" || optState === "starting" || optState === "rate_limited";
+
+  async function executeClear(type: "inverter" | "site_energy" | "optimizer") {
+    setClearConfirmType(null);
+    setClearing(type);
+    try {
+      const res = await fetch("/api/solar/sync/clear", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
+      if (res.ok) {
+        await fetchPeriods();
+      }
+    } catch { /* ignore */ }
+    setClearing(null);
+  }
+
+  // ── Data fetching ──────────────────────────────────────────────
 
   const fetchInventory = useCallback(async () => {
     try {
@@ -191,24 +309,14 @@ export default function SyncPage() {
       const json = await res.json();
       if (res.ok) {
         setPeriods(json);
-        // Smart default dates: last fetched end → today
         const today = new Date().toISOString().split("T")[0];
-        if (!dateTo) setDateTo(today);
-        if (!dateFrom) {
-          const allPeriods = [
-            ...(json.inverter?.periods ?? []),
-            ...(json.optimizer?.periods ?? []),
-          ];
-          if (allPeriods.length > 0) {
-            const latestEnd = allPeriods.reduce(
-              (max: string, p: FetchedPeriod) => (p.end > max ? p.end : max),
-              allPeriods[0].end
-            );
-            setDateFrom(latestEnd);
-          } else if (json.installation_date) {
-            setDateFrom(json.installation_date);
-          }
-        }
+        if (!invTo) setInvTo(today);
+        if (!seTo) setSeTo(today);
+        if (!optTo) setOptTo(today);
+        const instDate = json.installation_date;
+        if (!invFrom && instDate) setInvFrom(instDate);
+        if (!seFrom && instDate) setSeFrom(instDate);
+        if (!optFrom && instDate) setOptFrom(instDate);
       }
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,140 +332,129 @@ export default function SyncPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Countdown timers ────────────────────────────────────────────────
-  useEffect(() => {
-    if (retryCountdown <= 0) return;
-    const timer = setTimeout(() => setRetryCountdown((c) => c - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [retryCountdown]);
+  // ── Inverter chunk sync ────────────────────────────────────────
 
   useEffect(() => {
-    if (syncState === "rate_limited" && retryCountdown === 0 && jobId) {
-      setSyncState("running");
-      processChunks(jobId);
+    if (invRetry <= 0) return;
+    const timer = setTimeout(() => setInvRetry((c) => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [invRetry]);
+
+  useEffect(() => {
+    if (invState === "rate_limited" && invRetry === 0 && invJobId) {
+      setInvState("running");
+      processInvChunks(invJobId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [retryCountdown, syncState]);
+  }, [invRetry, invState]);
+
+  async function processInvChunks(jid: string) {
+    while (!invCancelled.current) {
+      try {
+        const res = await fetch("/api/solar/sync/chunk", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: jid }),
+        });
+        const json = await res.json();
+        if (!res.ok) { setInvError(json.error || "Unknown error"); setInvState("error"); return; }
+        setInvTotal(json.total_chunks ?? 0);
+        setInvCompleted(json.completed_chunks ?? 0);
+        if (json.current_equipment) setInvEquip(json.current_equipment);
+        if (json.current_period) setInvPeriod(json.current_period);
+        if (json.rows_inserted) setInvRows((p) => p + json.rows_inserted);
+        if (json.status === "rate_limited") { setInvRetry(json.retry_after ?? 60); setInvState("rate_limited"); return; }
+        if (json.done || json.status === "complete") { setInvState("complete"); fetchInventory(); fetchPeriods(); return; }
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) { setInvError(err instanceof Error ? err.message : "Network error"); setInvState("error"); return; }
+    }
+  }
+
+  async function handleInvSync() {
+    invCancelled.current = false;
+    setInvState("starting"); setInvError(""); setInvRows(0); setInvCompleted(0); setInvTotal(0);
+    try {
+      const res = await fetch("/api/solar/sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date_from: invFrom || undefined, date_to: invTo || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setInvError(json.message || json.error || "Failed"); setInvState("error"); return; }
+      if (json.status === "complete" && !json.job_id) { setInvState("complete"); fetchInventory(); fetchPeriods(); return; }
+      const jid = json.job_id; setInvJobId(jid); setInvTotal(json.total_chunks ?? 0);
+      setInvState("running"); await processInvChunks(jid);
+    } catch (err) { setInvError(err instanceof Error ? err.message : "Network error"); setInvState("error"); }
+  }
+
+  // ── Site energy sync ───────────────────────────────────────────
+
+  async function handleSeSync() {
+    setSeState("starting"); setSeError(""); setSeRows(0);
+    try {
+      const res = await fetch("/api/solar/sync/site-energy", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date_from: seFrom || undefined, date_to: seTo || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setSeError(json.error || "Failed"); setSeState("error"); return; }
+      if (json.status === "up_to_date") { setSeRows(0); setSeState("complete"); return; }
+      setSeRows(json.records_stored ?? 0);
+      setSeState("complete");
+      fetchPeriods();
+    } catch (err) { setSeError(err instanceof Error ? err.message : "Network error"); setSeState("error"); }
+  }
+
+  // ── Optimizer chunk sync ───────────────────────────────────────
 
   useEffect(() => {
-    if (optRetryCountdown <= 0) return;
-    const timer = setTimeout(() => setOptRetryCountdown((c) => c - 1), 1000);
+    if (optRetry <= 0) return;
+    const timer = setTimeout(() => setOptRetry((c) => c - 1), 1000);
     return () => clearTimeout(timer);
-  }, [optRetryCountdown]);
+  }, [optRetry]);
 
   useEffect(() => {
-    if (optSyncState === "rate_limited" && optRetryCountdown === 0 && optJobId) {
-      setOptSyncState("running");
+    if (optState === "rate_limited" && optRetry === 0 && optJobId) {
+      setOptState("running");
       processOptChunks(optJobId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [optRetryCountdown, optSyncState]);
-
-  // ── Inverter sync logic ─────────────────────────────────────────────
-
-  async function processChunks(jid: string) {
-    while (!cancelledRef.current) {
-      try {
-        const res = await fetch("/api/solar/sync/chunk", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jid }),
-        });
-        const json = await res.json();
-        if (!res.ok) { setErrorMsg(json.error || "Unknown error"); setSyncState("error"); return; }
-        setTotalChunks(json.total_chunks ?? 0);
-        setCompletedChunks(json.completed_chunks ?? 0);
-        if (json.current_equipment) setCurrentEquipment(json.current_equipment);
-        if (json.current_period) setCurrentPeriod(json.current_period);
-        if (json.rows_inserted) setRowsTotal((prev) => prev + json.rows_inserted);
-        if (json.status === "rate_limited") { setRetryCountdown(json.retry_after ?? 60); setSyncState("rate_limited"); return; }
-        if (json.done || json.status === "complete") {
-          setSyncState("complete");
-          fetchInventory();
-          fetchPeriods();
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-      } catch (err) { setErrorMsg(err instanceof Error ? err.message : "Network error"); setSyncState("error"); return; }
-    }
-  }
-
-  async function handleStartSync() {
-    cancelledRef.current = false;
-    setSyncState("starting"); setErrorMsg(""); setRowsTotal(0); setCompletedChunks(0); setTotalChunks(0);
-    try {
-      const res = await fetch("/api/solar/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date_from: dateFrom || undefined, date_to: dateTo || undefined }),
-      });
-      const json = await res.json();
-      if (!res.ok) { setErrorMsg(json.message || json.error || "Failed to start sync"); setSyncState("error"); return; }
-      if (json.status === "complete" && !json.job_id) {
-        setSyncState("complete");
-        fetchInventory();
-        fetchPeriods();
-        return;
-      }
-      const jid = json.job_id; setJobId(jid); setTotalChunks(json.total_chunks ?? 0); setCompletedChunks(json.completed_chunks ?? 0);
-      setSyncState("running"); await processChunks(jid);
-    } catch (err) { setErrorMsg(err instanceof Error ? err.message : "Network error"); setSyncState("error"); }
-  }
-
-  function handleCancel() { cancelledRef.current = true; setSyncState("idle"); }
-
-  // ── Optimizer sync logic ────────────────────────────────────────────
+  }, [optRetry, optState]);
 
   async function processOptChunks(jid: string) {
-    while (!optCancelledRef.current) {
+    while (!optCancelled.current) {
       try {
         const res = await fetch("/api/solar/sync/optimizers/chunk", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ job_id: jid }),
         });
         const json = await res.json();
-        if (!res.ok) { setOptErrorMsg(json.error || "Unknown error"); setOptSyncState("error"); return; }
-        setOptTotalChunks(json.total_chunks ?? 0);
-        setOptCompletedChunks(json.completed_chunks ?? 0);
-        if (json.current_equipment) setOptCurrentEquipment(json.current_equipment);
-        if (json.current_period) setOptCurrentPeriod(json.current_period);
-        if (json.rows_inserted) setOptRowsTotal((prev) => prev + json.rows_inserted);
-        if (json.status === "rate_limited") { setOptRetryCountdown(json.retry_after ?? 60); setOptSyncState("rate_limited"); return; }
-        if (json.done || json.status === "complete") {
-          setOptSyncState("complete");
-          fetchInventory();
-          fetchPeriods();
-          return;
-        }
+        if (!res.ok) { setOptError(json.error || "Unknown error"); setOptState("error"); return; }
+        setOptTotal(json.total_chunks ?? 0);
+        setOptCompleted(json.completed_chunks ?? 0);
+        if (json.current_equipment) setOptEquip(json.current_equipment);
+        if (json.current_period) setOptPeriod(json.current_period);
+        if (json.rows_inserted) setOptRows((p) => p + json.rows_inserted);
+        if (json.status === "rate_limited") { setOptRetry(json.retry_after ?? 60); setOptState("rate_limited"); return; }
+        if (json.done || json.status === "complete") { setOptState("complete"); fetchInventory(); fetchPeriods(); return; }
         await new Promise((r) => setTimeout(r, 300));
-      } catch (err) { setOptErrorMsg(err instanceof Error ? err.message : "Network error"); setOptSyncState("error"); return; }
+      } catch (err) { setOptError(err instanceof Error ? err.message : "Network error"); setOptState("error"); return; }
     }
   }
 
-  async function handleStartOptSync() {
-    optCancelledRef.current = false;
-    setOptSyncState("starting"); setOptErrorMsg(""); setOptRowsTotal(0); setOptCompletedChunks(0); setOptTotalChunks(0);
+  async function handleOptSync() {
+    optCancelled.current = false;
+    setOptState("starting"); setOptError(""); setOptRows(0); setOptCompleted(0); setOptTotal(0);
     try {
       const res = await fetch("/api/solar/sync/optimizers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date_from: dateFrom || undefined, date_to: dateTo || undefined }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date_from: optFrom || undefined, date_to: optTo || undefined }),
       });
       const json = await res.json();
-      if (!res.ok) { setOptErrorMsg(json.message || json.error || "Failed to start optimizer sync"); setOptSyncState("error"); return; }
-      if (json.status === "complete" && !json.job_id) {
-        setOptSyncState("complete");
-        fetchInventory();
-        fetchPeriods();
-        return;
-      }
-      const jid = json.job_id; setOptJobId(jid); setOptTotalChunks(json.total_chunks ?? 0); setOptCompletedChunks(json.completed_chunks ?? 0);
-      setOptSyncState("running"); await processOptChunks(jid);
-    } catch (err) { setOptErrorMsg(err instanceof Error ? err.message : "Network error"); setOptSyncState("error"); }
+      if (!res.ok) { setOptError(json.message || json.error || "Failed"); setOptState("error"); return; }
+      if (json.status === "complete" && !json.job_id) { setOptState("complete"); fetchInventory(); fetchPeriods(); return; }
+      const jid = json.job_id; setOptJobId(jid); setOptTotal(json.total_chunks ?? 0);
+      setOptState("running"); await processOptChunks(jid);
+    } catch (err) { setOptError(err instanceof Error ? err.message : "Network error"); setOptState("error"); }
   }
-
-  function handleOptCancel() { optCancelledRef.current = true; setOptSyncState("idle"); }
 
   /* ── Render ──────────────────────────────────────────────────── */
 
@@ -367,85 +464,15 @@ export default function SyncPage() {
         <div className="h-8 w-48 animate-pulse rounded-lg bg-border-light" />
         <div className="mt-6 space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-24 animate-pulse rounded-2xl bg-border-light" />
+            <div key={i} className="h-48 animate-pulse rounded-2xl bg-border-light" />
           ))}
         </div>
       </div>
     );
   }
 
-  const isSyncing = syncState === "running" || syncState === "starting" || syncState === "rate_limited";
-  const isOptSyncing = optSyncState === "running" || optSyncState === "starting" || optSyncState === "rate_limited";
-
-  /* ── Shared sync progress component ─── */
-  function renderSyncProgress(
-    state: SyncState, total: number, completed: number, pctVal: number,
-    equipName: string, period: string, rows: number, countdown: number,
-    errMsg: string, label: string,
-    onStart: () => void, onCancel: () => void, onDismiss: () => void,
-  ) {
-    if (state === "starting") {
-      return (
-        <div className="flex items-center gap-3 rounded-xl border border-brand/20 bg-brand-light/20 p-4">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-          <p className="text-sm font-medium text-foreground">{label === "optimizer" ? t("discoveringOptimizers") : t("discovering")}</p>
-        </div>
-      );
-    }
-
-    if (state === "running" || state === "rate_limited") {
-      return (
-        <div className="rounded-xl border border-brand/20 bg-brand-light/20 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-semibold text-foreground">
-              {state === "rate_limited" ? t("rateLimited") : (label === "optimizer" ? t("syncingOptimizers") : t("syncing"))}
-            </p>
-            <button onClick={onCancel} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("cancel")}</button>
-          </div>
-          <div className="mb-2 h-3 overflow-hidden rounded-full bg-border-light">
-            <div className="h-full rounded-full bg-brand transition-all duration-300" style={{ width: `${pctVal}%` }} />
-          </div>
-          <div className="flex items-center justify-between text-xs text-muted">
-            <span>{completed}/{total} {t("chunks")} ({pctVal}%)</span>
-            {rows > 0 && <span>{rows.toLocaleString()} {t("dataPoints")}</span>}
-          </div>
-          {equipName && <p className="mt-2 text-xs text-muted-light">{t("currentItem", { equipment: equipName, period })}</p>}
-          {state === "rate_limited" && countdown > 0 && (
-            <p className="mt-2 text-xs font-medium text-brand">{t("resumingIn", { seconds: countdown })}</p>
-          )}
-        </div>
-      );
-    }
-
-    if (state === "complete") {
-      return (
-        <div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-light/20 p-4">
-          <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-foreground">{label === "optimizer" ? t("optimizerSyncComplete") : t("complete")}</p>
-            {rows > 0 && <p className="text-xs text-muted">{t("completeSummary", { count: rows.toLocaleString() })}</p>}
-          </div>
-          <button onClick={onDismiss} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("dismiss")}</button>
-        </div>
-      );
-    }
-
-    if (state === "error") {
-      return (
-        <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-red-700 dark:text-red-400">{label === "optimizer" ? t("optimizerSyncError") : t("error")}</p>
-            <button onClick={onStart} className="rounded-lg bg-brand px-3 py-1 text-xs font-medium text-white hover:bg-brand-hover">{t("retry")}</button>
-          </div>
-          {errMsg && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{errMsg}</p>}
-        </div>
-      );
-    }
-
-    return null;
-  }
+  const inputClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50";
+  const installDate = periods?.installation_date ?? inventory?.installation_date ?? null;
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
@@ -461,108 +488,198 @@ export default function SyncPage() {
         <p className="mt-1 text-sm text-muted">{t("pageSubtitle")}</p>
       </div>
 
-      {/* ── Data Coverage Timeline ──────────────────────────────── */}
-      <div className="mb-8 rounded-2xl border border-border bg-surface p-6">
-        <h2 className="mb-1 text-lg font-semibold text-foreground">{t("fetchedTimeline")}</h2>
-        <p className="mb-5 text-xs text-muted">{t("fetchedTimelineDesc")}</p>
-
-        <div className="space-y-4">
-          <CoverageTimeline
-            label={t("inverterData")}
-            icon={
-              <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-              </svg>
-            }
-            periods={periods?.inverter?.periods ?? []}
-            installDate={periods?.installation_date ?? inventory?.installation_date ?? null}
-            count={periods?.inverter?.count ?? inventory?.inverter_count ?? 0}
-          />
-
-          <CoverageTimeline
-            label={t("optimizerData")}
-            icon={<SolarEdgeIcon className="h-5 w-5" />}
-            periods={periods?.optimizer?.periods ?? []}
-            installDate={periods?.installation_date ?? inventory?.installation_date ?? null}
-            count={periods?.optimizer?.count ?? inventory?.optimizer_count ?? 0}
-          />
-
-          {(periods?.inverter?.count === 0 && periods?.optimizer?.count === 0) && (
-            <p className="py-4 text-center text-sm text-muted">{t("noPeriodsYet")}</p>
+      {/* ── Card 1: Inverter Telemetry ───────────────────────────── */}
+      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+            </svg>
+            <h2 className="text-lg font-semibold text-foreground">{t("inverterData")}</h2>
+            {(periods?.inverter?.count ?? 0) > 0 && (
+              <span className="text-xs text-muted">({periods?.inverter?.count} {t("inverterLabel")})</span>
+            )}
+          </div>
+          {(periods?.inverter?.fetched?.length ?? 0) > 0 && (
+            <button onClick={() => setClearConfirmType("inverter")} disabled={anySyncing || clearing === "inverter"}
+              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
+              {clearing === "inverter" ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              )}
+            </button>
           )}
         </div>
-      </div>
+        <p className="mb-4 text-xs text-muted">{t("inverterSyncDesc")}</p>
 
-      {/* ── Sync Controls ──────────────────────────────────────── */}
-      <div className="mb-8 rounded-2xl border border-border bg-surface p-6">
-        <h2 className="mb-4 text-lg font-semibold text-foreground">{t("syncControls")}</h2>
+        <CoverageTimeline
+          fetched={periods?.inverter?.fetched ?? []}
+          missing={periods?.inverter?.missing ?? []}
+          installDate={installDate}
+        />
 
-        {/* Date range pickers */}
-        <div className="mb-5 grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">{t("dateFrom")}</label>
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} disabled={isSyncing || isOptSyncing}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50" />
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
+            <input type="date" value={invFrom} onChange={(e) => setInvFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
           </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">{t("dateTo")}</label>
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} disabled={isSyncing || isOptSyncing}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50" />
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
+            <input type="date" value={invTo} onChange={(e) => setInvTo(e.target.value)} disabled={anySyncing} className={inputClass} />
           </div>
-        </div>
-
-        {/* ── Inverter Sync Section ─── */}
-        <div className="mb-6">
-          <h3 className="mb-3 text-sm font-semibold text-foreground">{t("inverterSync")}</h3>
-          {syncState === "idle" && (
-            <button onClick={handleStartSync} disabled={isOptSyncing}
-              className="rounded-xl bg-brand px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
+          {invState === "idle" && (
+            <button onClick={handleInvSync} disabled={anySyncing}
+              className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
               {t("startSync")}
             </button>
           )}
-          {renderSyncProgress(syncState, totalChunks, completedChunks, pct, currentEquipment, currentPeriod, rowsTotal, retryCountdown, errorMsg, "inverter", handleStartSync, handleCancel, () => setSyncState("idle"))}
         </div>
 
-        {/* ── Optimizer Sync Section ─── */}
-        <div className="border-t border-border pt-6">
-          <div className="mb-3 flex items-center gap-2">
-            <SolarEdgeIcon className="h-5 w-5" />
-            <h3 className="text-sm font-semibold text-foreground">{t("optimizerSyncTitle")}</h3>
-          </div>
-          <p className="mb-4 text-xs text-muted">{t("optimizerSyncDesc")}</p>
-
-          {!inventory?.portal_configured ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-900/10">
-              <p className="mb-1 text-sm font-medium text-amber-800 dark:text-amber-300">{t("portalNotConfigured")}</p>
-              <p className="mb-3 text-xs text-amber-700 dark:text-amber-400">{t("portalNotConfiguredDesc")}</p>
-              <Link href="/dashboard/system"
-                className="inline-flex items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-hover">
-                {t("configureCreds")}
-              </Link>
-            </div>
-          ) : (
-            <>
-              <p className="mb-4 text-xs font-medium text-accent">{t("portalConnectedAs", { username: inventory.portal_username ?? "" })}</p>
-              {optSyncState === "idle" && (
-                <button onClick={handleStartOptSync} disabled={isSyncing}
-                  className="rounded-xl border-2 border-brand bg-white px-6 py-3 text-sm font-semibold text-brand shadow-sm transition-colors hover:bg-brand hover:text-white disabled:opacity-50 dark:bg-background">
-                  {t("startOptimizerSync")}
-                </button>
-              )}
-              {renderSyncProgress(optSyncState, optTotalChunks, optCompletedChunks, optPct, optCurrentEquipment, optCurrentPeriod, optRowsTotal, optRetryCountdown, optErrorMsg, "optimizer", handleStartOptSync, handleOptCancel, () => setOptSyncState("idle"))}
-            </>
-          )}
+        <div className="mt-4">
+          <SyncProgress state={invState} total={invTotal} completed={invCompleted}
+            equipName={invEquip} period={invPeriod} rows={invRows} countdown={invRetry}
+            errMsg={invError} label="inverter"
+            onStart={handleInvSync} onCancel={() => { invCancelled.current = true; setInvState("idle"); }}
+            onDismiss={() => setInvState("idle")} />
         </div>
       </div>
 
-      {/* ── Collapsible Sync History ────────────────────────────── */}
+      {/* ── Card 2: Site Energy (15-min) ─────────────────────────── */}
+      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+            </svg>
+            <h2 className="text-lg font-semibold text-foreground">{t("siteEnergySyncTitle")}</h2>
+          </div>
+          {(periods?.site_energy?.fetched?.length ?? 0) > 0 && (
+            <button onClick={() => setClearConfirmType("site_energy")} disabled={anySyncing || clearing === "site_energy"}
+              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
+              {clearing === "site_energy" ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              )}
+            </button>
+          )}
+        </div>
+        <p className="mb-4 text-xs text-muted">{t("siteEnergySyncDesc")}</p>
+
+        <CoverageTimeline
+          fetched={periods?.site_energy?.fetched ?? []}
+          missing={periods?.site_energy?.missing ?? []}
+          installDate={installDate}
+        />
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
+            <input type="date" value={seFrom} onChange={(e) => setSeFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
+          </div>
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
+            <input type="date" value={seTo} onChange={(e) => setSeTo(e.target.value)} disabled={anySyncing} className={inputClass} />
+          </div>
+          {seState === "idle" && (
+            <button onClick={handleSeSync} disabled={anySyncing}
+              className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
+              {t("startSync")}
+            </button>
+          )}
+        </div>
+
+        <div className="mt-4">
+          <SyncProgress state={seState} total={1} completed={seState === "complete" ? 1 : 0}
+            equipName="" period="" rows={seRows} countdown={0}
+            errMsg={seError} label="site_energy"
+            onStart={handleSeSync} onCancel={() => setSeState("idle")}
+            onDismiss={() => setSeState("idle")} />
+        </div>
+      </div>
+
+      {/* ── Card 3: Optimizer Telemetry ───────────────────────────── */}
+      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <SolarEdgeIcon className="h-5 w-5" />
+            <h2 className="text-lg font-semibold text-foreground">{t("optimizerSyncTitle")}</h2>
+            {(periods?.optimizer?.count ?? 0) > 0 && (
+              <span className="text-xs text-muted">({periods?.optimizer?.count} {t("optimizers")})</span>
+            )}
+          </div>
+          {(periods?.optimizer?.fetched?.length ?? 0) > 0 && (
+            <button onClick={() => setClearConfirmType("optimizer")} disabled={anySyncing || clearing === "optimizer"}
+              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
+              {clearing === "optimizer" ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              )}
+            </button>
+          )}
+        </div>
+        <p className="mb-4 text-xs text-muted">{t("optimizerSyncDesc")}</p>
+
+        {!inventory?.portal_configured ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-900/10">
+            <p className="mb-1 text-sm font-medium text-amber-800 dark:text-amber-300">{t("portalNotConfigured")}</p>
+            <p className="mb-3 text-xs text-amber-700 dark:text-amber-400">{t("portalNotConfiguredDesc")}</p>
+            <Link href="/dashboard/system"
+              className="inline-flex items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-hover">
+              {t("configureCreds")}
+            </Link>
+          </div>
+        ) : (
+          <>
+            <p className="mb-4 text-xs font-medium text-accent">{t("portalConnectedAs", { username: inventory?.portal_username ?? "" })}</p>
+
+            <CoverageTimeline
+              fetched={periods?.optimizer?.fetched ?? []}
+              missing={periods?.optimizer?.missing ?? []}
+              installDate={installDate}
+            />
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="flex-1">
+                <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
+                <input type="date" value={optFrom} onChange={(e) => setOptFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
+              </div>
+              <div className="flex-1">
+                <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
+                <input type="date" value={optTo} onChange={(e) => setOptTo(e.target.value)} disabled={anySyncing} className={inputClass} />
+              </div>
+              {optState === "idle" && (
+                <button onClick={handleOptSync} disabled={anySyncing}
+                  className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
+                  {t("startSync")}
+                </button>
+              )}
+            </div>
+
+            <div className="mt-4">
+              <SyncProgress state={optState} total={optTotal} completed={optCompleted}
+                equipName={optEquip} period={optPeriod} rows={optRows} countdown={optRetry}
+                errMsg={optError} label="optimizer"
+                onStart={handleOptSync} onCancel={() => { optCancelled.current = true; setOptState("idle"); }}
+                onDismiss={() => setOptState("idle")} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Sync History ─────────────────────────────────────────── */}
       {inventory && inventory.sync_history.length > 0 && (
         <div className="rounded-2xl border border-border bg-surface">
-          <button
-            type="button"
-            onClick={() => setHistoryOpen(!historyOpen)}
-            className="flex w-full items-center justify-between p-5 text-start"
-          >
+          <button type="button" onClick={() => setHistoryOpen(!historyOpen)}
+            className="flex w-full items-center justify-between p-5 text-start">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-light">
                 <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -571,15 +688,11 @@ export default function SyncPage() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">{t("syncHistory")}</p>
-                <p className="mt-0.5 text-xs text-muted">
-                  {historyOpen ? t("hideHistory") : t("showHistory")}
-                </p>
+                <p className="mt-0.5 text-xs text-muted">{historyOpen ? t("hideHistory") : t("showHistory")}</p>
               </div>
             </div>
-            <svg
-              className={`h-5 w-5 text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
-            >
+            <svg className={`h-5 w-5 text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
@@ -611,6 +724,33 @@ export default function SyncPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Clear Confirmation Modal ─────────────────────────────── */}
+      {clearConfirmType && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                <svg className="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-foreground">{t("clearData")}</h3>
+            </div>
+            <p className="mb-6 text-sm text-muted">{t("clearConfirm")}</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setClearConfirmType(null)}
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted hover:bg-surface-hover">
+                {t("cancel")}
+              </button>
+              <button onClick={() => executeClear(clearConfirmType)}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                {t("clearData")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

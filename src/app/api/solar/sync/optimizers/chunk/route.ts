@@ -262,6 +262,14 @@ export async function POST(request: NextRequest) {
       period_end: chunk.period_end,
     });
 
+    await supabase.from("sync_coverage").insert({
+      system_id: job.system_id,
+      source: "optimizer",
+      period_start: chunk.period_start,
+      period_end: chunk.period_end,
+      status: rows.length > 0 ? "fetched" : "missing",
+    });
+
     const newCompleted = job.completed_chunks + 1;
     await supabase
       .from("sync_jobs")

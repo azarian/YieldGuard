@@ -24,86 +24,96 @@ export async function GET() {
 
   const { data: equipment } = await supabase
     .from("equipment")
-    .select("id, serial_number, equipment_type, name")
+    .select("id, equipment_type")
     .eq("system_id", system.id);
 
-  if (!equipment || equipment.length === 0) {
-    return NextResponse.json({
-      installation_date: system.installation_date,
-      inverter: { periods: [], equipment: [] },
-      optimizer: { periods: [], equipment: [] },
-    });
+  const inverterCount = equipment?.filter((e) => e.equipment_type === "inverter").length ?? 0;
+  const optimizerCount = equipment?.filter((e) => e.equipment_type === "optimizer").length ?? 0;
+
+  // Fetch all sync_coverage for this system
+  const { data: coverage } = await supabase
+    .from("sync_coverage")
+    .select("source, period_start, period_end, status")
+    .eq("system_id", system.id)
+    .order("period_start", { ascending: true });
+
+  const allCoverage = coverage ?? [];
+
+  function getCoverageBySource(source: string) {
+    const records = allCoverage.filter((c) => c.source === source);
+    const fetched = records.filter((c) => c.status === "fetched");
+    const missing = records.filter((c) => c.status === "missing");
+    return {
+      fetched: mergePeriods(fetched),
+      missing: mergePeriods(missing),
+    };
   }
 
-  const inverters = equipment.filter((e) => e.equipment_type === "inverter");
-  const optimizers = equipment.filter((e) => e.equipment_type === "optimizer");
+  const inverter = getCoverageBySource("inverter");
+  const siteEnergy = getCoverageBySource("site_energy");
+  const optimizer = getCoverageBySource("optimizer");
 
-  const inverterIds = inverters.map((e) => e.id);
-  const optimizerIds = optimizers.map((e) => e.id);
-
-  // Fetch periods for inverters (public_api)
-  let inverterPeriods: Array<{ period_start: string; period_end: string }> = [];
-  if (inverterIds.length > 0) {
+  // Fall back to fetched_periods for inverter/optimizer if sync_coverage is empty
+  // (backward compat for data synced before this migration)
+  if (inverter.fetched.length === 0 && inverterCount > 0) {
+    const inverterIds = equipment!.filter((e) => e.equipment_type === "inverter").map((e) => e.id);
     const { data } = await supabase
       .from("fetched_periods")
       .select("period_start, period_end")
       .in("equipment_id", inverterIds)
       .eq("source", "public_api")
       .order("period_start", { ascending: true });
-    inverterPeriods = data ?? [];
+    if (data && data.length > 0) {
+      inverter.fetched = mergePeriods(data);
+    }
   }
 
-  // Fetch periods for optimizers (portal_api) — aggregate across all optimizers
-  let optimizerPeriods: Array<{ period_start: string; period_end: string }> = [];
-  if (optimizerIds.length > 0) {
+  if (optimizer.fetched.length === 0 && optimizerCount > 0) {
+    const optimizerIds = equipment!.filter((e) => e.equipment_type === "optimizer").map((e) => e.id);
     const { data } = await supabase
       .from("fetched_periods")
       .select("period_start, period_end")
       .in("equipment_id", optimizerIds)
       .eq("source", "portal_api")
       .order("period_start", { ascending: true });
-    optimizerPeriods = data ?? [];
-  }
-
-  // Merge overlapping periods for display
-  function mergePeriods(
-    periods: Array<{ period_start: string; period_end: string }>
-  ) {
-    if (periods.length === 0) return [];
-    const sorted = [...periods].sort((a, b) =>
-      a.period_start.localeCompare(b.period_start)
-    );
-    const merged: Array<{ start: string; end: string }> = [];
-    let cur = { start: sorted[0].period_start, end: sorted[0].period_end };
-
-    for (let i = 1; i < sorted.length; i++) {
-      const next = sorted[i];
-      if (next.period_start <= addDay(cur.end)) {
-        if (next.period_end > cur.end) cur.end = next.period_end;
-      } else {
-        merged.push(cur);
-        cur = { start: next.period_start, end: next.period_end };
-      }
+    if (data && data.length > 0) {
+      optimizer.fetched = mergePeriods(data);
     }
-    merged.push(cur);
-    return merged;
-  }
-
-  function addDay(dateStr: string): string {
-    const d = new Date(dateStr + "T00:00:00Z");
-    d.setUTCDate(d.getUTCDate() + 1);
-    return d.toISOString().split("T")[0];
   }
 
   return NextResponse.json({
     installation_date: system.installation_date,
-    inverter: {
-      periods: mergePeriods(inverterPeriods),
-      count: inverters.length,
-    },
-    optimizer: {
-      periods: mergePeriods(optimizerPeriods),
-      count: optimizers.length,
-    },
+    inverter: { ...inverter, count: inverterCount },
+    optimizer: { ...optimizer, count: optimizerCount },
+    site_energy: siteEnergy,
   });
+}
+
+function mergePeriods(
+  periods: Array<{ period_start: string; period_end: string }>
+) {
+  if (periods.length === 0) return [];
+  const sorted = [...periods].sort((a, b) =>
+    a.period_start.localeCompare(b.period_start)
+  );
+  const merged: Array<{ start: string; end: string }> = [];
+  let cur = { start: sorted[0].period_start, end: sorted[0].period_end };
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    if (next.period_start <= addDay(cur.end)) {
+      if (next.period_end > cur.end) cur.end = next.period_end;
+    } else {
+      merged.push(cur);
+      cur = { start: next.period_start, end: next.period_end };
+    }
+  }
+  merged.push(cur);
+  return merged;
+}
+
+function addDay(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().split("T")[0];
 }
