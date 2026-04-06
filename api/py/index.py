@@ -115,7 +115,7 @@ async def _get_system(token: str) -> dict:
     systems = await _supabase_query(
         token,
         "solar_systems",
-        {"select": "id,system_name,site_id,last_synced_at,latitude,longitude,peak_power_kwp,azimuth,tilt,electricity_price_per_kwh,currency"},
+        {"select": "id,system_name,site_id,last_synced_at,latitude,longitude,peak_power_kwp,azimuth,tilt,electricity_price_per_kwh,currency,altitude,installation_date"},
     )
     if not systems:
         raise HTTPException(status_code=404, detail="No solar system registered")
@@ -616,6 +616,70 @@ async def analyze_losses(request: Request):
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
+
+
+# ── Soiling Analysis (new — uses SoilingAnalyzer + site_energy_15min) ────────
+
+
+@app.get("/api/py/analyze/soiling")
+async def analyze_soiling(request: Request):
+    from timezonefinder import TimezoneFinder
+    from api.py.analysis_service import (
+        SiteDataLoader, AnalysisOrchestrator, ResponseFormatter, build_system_config,
+    )
+
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
+
+    lat = system.get("latitude")
+    lng = system.get("longitude")
+    kwp = system.get("peak_power_kwp")
+
+    if not lat or not lng or not kwp:
+        raise HTTPException(
+            status_code=400,
+            detail="Site details (latitude, longitude, peak power) are not available. Please sync your system first.",
+        )
+
+    tf = TimezoneFinder()
+    tz_str = tf.timezone_at(lat=lat, lng=lng) or "UTC"
+
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=365)
+
+    loader = SiteDataLoader(token)
+    energy_df = await loader.load_site_energy(system_id, start_date.isoformat(), end_date.isoformat())
+    precip_df = await loader.load_precipitation(lat, lng, start_date.isoformat(), end_date.isoformat())
+
+    config = build_system_config(system, tz_str)
+    result = await AnalysisOrchestrator.run(energy_df, precip_df, config)
+
+    price = system.get("electricity_price_per_kwh")
+    currency = system.get("currency", "ILS")
+
+    response = ResponseFormatter.format(result, price, currency)
+
+    recs = ResponseFormatter.format_recommendations(system_id, result.summary)
+    stored_recs = []
+    if recs:
+        try:
+            stored_recs = await _supabase_insert(token, "recommendations", recs)
+        except Exception:
+            logging.exception("Failed to store soiling recommendations")
+
+    return {
+        "system": {
+            "name": system["system_name"],
+            "site_id": system["site_id"],
+            "peak_power_kwp": kwp,
+            "latitude": lat,
+            "longitude": lng,
+        },
+        **response,
+        "recommendations_created": len(stored_recs),
+    }
 
 # ── Per-Panel Analysis ───────────────────────────────────────────────────────
 
