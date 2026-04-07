@@ -593,11 +593,6 @@ async def analyze_losses(request: Request):
 
     losses = _compute_losses(power_entries, irradiance_map, kwp)
 
-    recs = _generate_recommendations(system_id, losses)
-    stored_recs = []
-    if recs:
-        stored_recs = await _supabase_insert(token, "recommendations", recs)
-
     return {
         "system": {
             "name": system["system_name"],
@@ -612,7 +607,6 @@ async def analyze_losses(request: Request):
             system.get("electricity_price_per_kwh"),
             system.get("currency", "ILS"),
         ),
-        "recommendations_created": len(stored_recs),
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -661,14 +655,6 @@ async def analyze_soiling(request: Request):
 
     response = ResponseFormatter.format(result, price, currency)
 
-    recs = ResponseFormatter.format_recommendations(system_id, result.summary)
-    stored_recs = []
-    if recs:
-        try:
-            stored_recs = await _supabase_insert(token, "recommendations", recs)
-        except Exception:
-            logging.exception("Failed to store soiling recommendations")
-
     return {
         "system": {
             "name": system["system_name"],
@@ -678,7 +664,6 @@ async def analyze_soiling(request: Request):
             "longitude": lng,
         },
         **response,
-        "recommendations_created": len(stored_recs),
     }
 
 # ── Per-Panel Analysis ───────────────────────────────────────────────────────
@@ -775,48 +760,6 @@ async def analyze_panels(request: Request):
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
 
-
-# ── Recommendations API ──────────────────────────────────────────────────────
-
-
-@app.get("/api/py/recommendations")
-async def list_recommendations(request: Request):
-    token = _get_token(request)
-    system = await _get_system(token)
-
-    status_filter = request.query_params.get("status", "active")
-
-    recs = await _supabase_query(
-        token,
-        "recommendations",
-        {
-            "select": "id,type,severity,title,message,metadata,status,created_at,status_changed_at",
-            "system_id": f"eq.{system['id']}",
-            "status": f"eq.{status_filter}",
-            "order": "created_at.desc",
-        },
-    )
-
-    return {"recommendations": recs}
-
-
-@app.patch("/api/py/recommendations/{rec_id}")
-async def update_recommendation(rec_id: str, request: Request):
-    token = _get_token(request)
-
-    body = await request.json()
-    new_status = body.get("status")
-    if new_status not in ("dismissed", "resolved"):
-        raise HTTPException(status_code=400, detail="Status must be 'dismissed' or 'resolved'")
-
-    updated = await _supabase_patch(
-        token,
-        "recommendations",
-        {"id": f"eq.{rec_id}"},
-        {"status": new_status, "status_changed_at": datetime.now(timezone.utc).isoformat()},
-    )
-
-    return {"updated": updated}
 
 
 # ── Optimizer Sync Endpoints ──────────────────────────────────────────────────

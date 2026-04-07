@@ -31,7 +31,6 @@ interface LossResult {
   losses: { totals: { actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number; system_loss_pct: number; cloud_loss_pct: number }; daily: LossDay[] };
   monetary: MonetaryLoss | null; recommendations_created: number;
 }
-interface Recommendation { id: string; type: string; severity: "info" | "warning" | "critical"; title: string; message: string; status: string; created_at: string }
 
 interface PanelData {
   serial_number: string;
@@ -59,19 +58,6 @@ function TrendBadge({ direction, pct }: { direction: string; pct: number }) {
   );
 }
 
-function SeverityBadge({ severity }: { severity: string }) {
-  const styles: Record<string, string> = {
-    info: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-    warning: "bg-brand-light text-brand dark:bg-yellow-900/30 dark:text-yellow-400",
-    critical: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  };
-  return (
-    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${styles[severity] ?? styles.info}`}>
-      {severity}
-    </span>
-  );
-}
-
 function MetricCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <div className="rounded-2xl border border-border bg-surface p-5">
@@ -88,7 +74,6 @@ export default function DashboardPage() {
   const t = useTranslations("dashboard");
   const ta = useTranslations("analysis");
   const tl = useTranslations("losses");
-  const tr = useTranslations("recommendations");
   const tp = useTranslations("panels");
   const supabase = createClient();
 
@@ -97,6 +82,8 @@ export default function DashboardPage() {
   const [hasSystem, setHasSystem] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [pricePerKwh, setPricePerKwh] = useState<number | null>(null);
+  const [currency, setCurrency] = useState("ILS");
   const [syncStats, setSyncStats] = useState<{ inverters: number; hasData: boolean } | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -104,8 +91,6 @@ export default function DashboardPage() {
   const [lossLoading, setLossLoading] = useState(false);
   const [lossError, setLossError] = useState<string | null>(null);
   const [lossData, setLossData] = useState<LossResult | null>(null);
-  const [recs, setRecs] = useState<Recommendation[]>([]);
-  const [updatingRec, setUpdatingRec] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<PanelData[] | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
 
@@ -120,11 +105,15 @@ export default function DashboardPage() {
       if (!user) { setAuthLoading(false); return; }
       const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
       setDisplayName(profile?.full_name ?? user.email ?? "");
-      const { data: sys } = await supabase.from("solar_systems").select("id, last_synced_at").eq("user_id", user.id).single();
+      const { data: sys } = await supabase.from("solar_systems").select("id, last_synced_at, electricity_price_per_kwh, currency").eq("user_id", user.id).single();
       setHasSystem(!!sys);
-      if (sys) setLastSyncedAt(sys.last_synced_at);
+      if (sys) {
+        setLastSyncedAt(sys.last_synced_at);
+        setPricePerKwh(sys.electricity_price_per_kwh ?? null);
+        setCurrency(sys.currency ?? "ILS");
+      }
       setAuthLoading(false);
-      if (sys) { fetchAnalysis(); fetchRecs(); fetchPanels(); fetchSyncStats(); }
+      if (sys) { fetchAnalysis(); fetchPanels(); fetchSyncStats(); }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -164,16 +153,11 @@ export default function DashboardPage() {
       const res = await fetch("/api/py/analyze/losses", { headers: { Authorization: `Bearer ${token}` } });
       const json = await res.json();
       if (!res.ok) { setLossError(json.detail || json.error || tl("fetchError")); setLossLoading(false); return; }
-      setLossData(json); fetchRecs();
+      setLossData(json);
     } catch (err) { setLossError(err instanceof Error ? err.message : tl("fetchError")); }
     setLossLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getToken, tl]);
-
-  const fetchRecs = useCallback(async () => {
-    const token = await getToken(); if (!token) return;
-    try { const res = await fetch("/api/py/recommendations", { headers: { Authorization: `Bearer ${token}` } }); const json = await res.json(); if (res.ok) setRecs(json.recommendations ?? []); } catch { /* ignore */ }
-  }, [getToken]);
 
   const fetchPanels = useCallback(async () => {
     setPanelLoading(true);
@@ -186,12 +170,6 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
     setPanelLoading(false);
   }, [getToken]);
-
-  async function updateRec(id: string, status: "dismissed" | "resolved") {
-    setUpdatingRec(id); const token = await getToken(); if (!token) return;
-    try { await fetch(`/api/py/recommendations/${id}`, { method: "PATCH", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ status }) }); setRecs((prev) => prev.filter((r) => r.id !== id)); } catch { /* ignore */ }
-    setUpdatingRec(null);
-  }
 
   /* ── Loading ────────────────────────────────────────────────── */
   if (authLoading) {
@@ -288,39 +266,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Recommendations */}
-      {recs.length > 0 && (
-        <div className="mb-8">
-          <h2 className="mb-4 text-lg font-semibold text-foreground">{tr("title")}</h2>
-          <div className="space-y-3">
-            {recs.map((rec) => (
-              <div key={rec.id}
-                className={`rounded-2xl border p-5 ${
-                  rec.severity === "critical" ? "border-red-200 bg-red-50/50 dark:border-red-800 dark:bg-red-900/10"
-                    : rec.severity === "warning" ? "border-brand/20 bg-brand-light/30 dark:border-yellow-800 dark:bg-yellow-900/10"
-                    : "border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-900/10"
-                }`}>
-                <div className="mb-2 flex items-center gap-3">
-                  <SeverityBadge severity={rec.severity} />
-                  <span className="text-sm font-semibold text-foreground">{rec.title}</span>
-                </div>
-                <p className="mb-3 text-sm text-muted">{rec.message}</p>
-                <div className="flex gap-2">
-                  <button onClick={() => updateRec(rec.id, "dismissed")} disabled={updatingRec === rec.id}
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface-hover disabled:opacity-50">
-                    {tr("dismiss")}
-                  </button>
-                  <button onClick={() => updateRec(rec.id, "resolved")} disabled={updatingRec === rec.id}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50">
-                    {tr("resolve")}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Analysis loading */}
       {analysisLoading && (
         <div className="mb-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -338,27 +283,60 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Key Metric Cards */}
+      {/* Hero Cards */}
       {data && (
         <>
           <div className="mb-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Current Power */}
             <div className="rounded-2xl border border-border bg-surface p-5">
-              <p className="text-sm text-muted">{ta("totalEnergy")}</p>
-              <p className="mt-1 text-2xl font-bold text-foreground">{energy ? `${energy.total_kwh} kWh` : "—"}</p>
-              <p className="mt-1 text-xs text-muted-light">{energy ? ta("daysAnalyzed", { count: energy.days_analyzed }) : ""}</p>
-            </div>
-            <div className="rounded-2xl border border-border bg-surface p-5">
-              <p className="text-sm text-muted">{ta("avgDaily")}</p>
-              <p className="mt-1 text-2xl font-bold text-foreground">{energy ? `${energy.average_daily_kwh} kWh` : "—"}</p>
-              {energy && <div className="mt-1"><TrendBadge direction={energy.trend.direction} pct={energy.trend.change_pct} /></div>}
-            </div>
-            <MetricCard label={ta("peakPower")} value={power ? `${power.peak_kw} kW` : "—"} sub={power?.peak_time ?? ""} />
-            <div className="rounded-2xl border border-border bg-surface p-5">
+              <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-brand-light">
+                <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                </svg>
+              </div>
               <p className="text-sm text-muted">{ta("currentPower")}</p>
               <p className={`mt-1 text-2xl font-bold ${overview?.is_producing ? "text-accent" : "text-muted-light"}`}>
                 {overview ? `${overview.current_power_kw} kW` : "—"}
               </p>
               <p className="mt-1 text-xs text-muted-light">{overview?.is_producing ? ta("producing") : overview ? ta("notProducing") : ""}</p>
+            </div>
+
+            {/* Today\'s Energy */}
+            <div className="rounded-2xl border border-border bg-surface p-5">
+              <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-accent-light">
+                <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+                </svg>
+              </div>
+              <p className="text-sm text-muted">{ta("todayEnergy")}</p>
+              <p className="mt-1 text-2xl font-bold text-foreground">{overview ? `${overview.last_day_kwh} kWh` : "—"}</p>
+              {energy && <div className="mt-1"><TrendBadge direction={energy.trend.direction} pct={energy.trend.change_pct} /></div>}
+            </div>
+
+            {/* System Health */}
+            <div className="rounded-2xl border border-border bg-surface p-5">
+              <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-accent-light">
+                <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <p className="text-sm text-muted">{ta("systemHealth")}</p>
+              <p className="mt-1 text-2xl font-bold text-accent">{ta("healthGood")}</p>
+              <p className="mt-1 text-xs text-muted-light">{ta("allSystemsNormal")}</p>
+            </div>
+
+            {/* Monthly Savings */}
+            <div className="rounded-2xl border border-border bg-surface p-5">
+              <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-brand-light">
+                <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
+                </svg>
+              </div>
+              <p className="text-sm text-muted">{ta("monthlySavings")}</p>
+              <p className="mt-1 text-2xl font-bold text-foreground">
+                {overview && pricePerKwh ? `${({ILS: "₪", USD: "$", EUR: "€"} as Record<string,string>)[currency] ?? currency}${Math.round(overview.last_month_kwh * pricePerKwh)}` : "—"}
+              </p>
+              <p className="mt-1 text-xs text-muted-light">{overview ? `${overview.last_month_kwh} kWh` : ""}</p>
             </div>
           </div>
 

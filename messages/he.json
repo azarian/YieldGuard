@@ -165,7 +165,12 @@
     "lastMonth": "חודש אחרון",
     "avgActivePower": "הספק פעיל ממוצע",
     "activeIntervals": "{active} מתוך {total} מרווחים פעילים",
-    "analyzedAt": "הניתוח נוצר ב-{date}"
+    "analyzedAt": "הניתוח נוצר ב-{date}",
+    "todayEnergy": "אנרגיה היום",
+    "systemHealth": "תקינות המערכת",
+    "healthGood": "תקין",
+    "allSystemsNormal": "כל המערכות פועלות כרגיל",
+    "monthlySavings": "חיסכון חודשי"
   },
   "losses": {
     "title": "ניתוח מלוכלכות",
@@ -198,13 +203,17 @@
     "rainMm": "{mm} מ\"מ גשם",
     "noEvents": "לא זוהו אירועי ניקוי.",
     "analysisRange": "ניתוח: {start} – {end} ({days} ימים)",
-    "seasonalRates": "קצבי מלוכלכות עונתיים"
-  },
-  "recommendations": {
-    "title": "המלצות",
-    "dismiss": "דחייה",
-    "resolve": "תיקנתי את זה",
-    "noActive": "אין המלצות פעילות."
+    "seasonalRates": "קצבי מלוכלכות עונתיים",
+    "systemLoss": "אובדן מערכת (לכלוך/הצללה)",
+    "cloudLoss": "השפעת עננות",
+    "actualProduction": "ייצור בפועל",
+    "clearSkyPotential": "פוטנציאל שמיים בהירים",
+    "dailyBreakdown": "פירוט יומי",
+    "actual": "בפועל",
+    "cloudLossShort": "אובדן עננות",
+    "systemLossShort": "אובדן מערכת",
+    "moneyLossToday": "הכנסה שאבדה היום",
+    "moneyLoss7d": "הכנסה שאבדה (7 ימים)"
   },
   "sync": {
     "syncNow": "סנכרון נתונים",

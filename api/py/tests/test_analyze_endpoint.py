@@ -47,12 +47,10 @@ class TestAnalyzeLossesEndpoint:
         assert resp.status_code == 401
 
     @patch("api.py.index._get_system")
-    @patch("api.py.index._supabase_insert")
     def test_returns_soiling_response(
-        self, mock_insert, mock_get_system, client, mock_system_row, sample_result,
+        self, mock_get_system, client, mock_system_row, sample_result,
     ):
         mock_get_system.return_value = mock_system_row
-        mock_insert.return_value = []
 
         with patch("api.py.analysis_service.SiteDataLoader") as MockLoader, \
              patch("api.py.analysis_service.AnalysisOrchestrator") as MockOrch:
@@ -76,7 +74,6 @@ class TestAnalyzeLossesEndpoint:
         assert "daily" in data
         assert "events" in data
         assert "monetary" in data
-        assert "recommendations_created" in data
 
     @patch("api.py.index._get_system")
     def test_returns_400_when_missing_coords(self, mock_get_system, client, mock_system_row):
