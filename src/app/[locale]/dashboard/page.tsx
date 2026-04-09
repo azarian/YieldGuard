@@ -25,11 +25,15 @@ interface AnalysisResult {
   analyzed_at: string;
 }
 
-interface LossDay { date: string; actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number }
-interface MonetaryLoss { currency_per_kwh: number; currency: string; currency_symbol: string; loss_today: number; loss_7d: number; loss_monthly_projected: number; loss_yearly_projected: number; avg_daily_loss: number }
-interface LossResult {
-  losses: { totals: { actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number; system_loss_pct: number; cloud_loss_pct: number }; daily: LossDay[] };
-  monetary: MonetaryLoss | null;
+interface SoilingDay { date: string; soiling_ratio: number | null; actual_kwh: number; clean_kwh: number; lost_kwh: number; classification: string; cleaning: boolean }
+interface CleaningEvent { date: string; type: string; rain_mm: number }
+interface SoilingMonetary { currency_per_kwh: number; currency: string; currency_symbol: string; total_lost_money: number; annual_avg_loss: number; loss_monthly_projected: number; loss_yearly_projected: number; avg_daily_loss: number }
+interface SoilingResult {
+  summary: { current_sr: number; current_loss_pct: number; total_lost_kwh: number; n_cleaning_events: number; loss_since_last_clean: number; avg_summer_rate: number; avg_winter_rate: number; analysis_start: string; analysis_end: string; n_days: number };
+  daily: SoilingDay[];
+  events: CleaningEvent[];
+  monetary: SoilingMonetary;
+  analyzed_at: string;
 }
 
 interface PanelData {
@@ -88,9 +92,9 @@ export default function DashboardPage() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [data, setData] = useState<AnalysisResult | null>(null);
-  const [lossLoading, setLossLoading] = useState(false);
-  const [lossError, setLossError] = useState<string | null>(null);
-  const [lossData, setLossData] = useState<LossResult | null>(null);
+  const [soilingLoading, setSoilingLoading] = useState(false);
+  const [soilingError, setSoilingError] = useState<string | null>(null);
+  const [soilingData, setSoilingData] = useState<SoilingResult | null>(null);
   const [panelData, setPanelData] = useState<PanelData[] | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
 
@@ -145,18 +149,17 @@ export default function DashboardPage() {
     setAnalysisLoading(false);
   }, [getToken, ta]);
 
-  const fetchLosses = useCallback(async () => {
-    setLossLoading(true); setLossError(null);
+  const fetchSoiling = useCallback(async () => {
+    setSoilingLoading(true); setSoilingError(null);
     const token = await getToken();
-    if (!token) { setLossError(tl("notAvailable")); setLossLoading(false); return; }
+    if (!token) { setSoilingError(tl("notAvailable")); setSoilingLoading(false); return; }
     try {
-      const res = await fetch("/api/py/analyze/losses", { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch("/api/py/analyze/soiling", { headers: { Authorization: `Bearer ${token}` } });
       const json = await res.json();
-      if (!res.ok) { setLossError(json.detail || json.error || tl("fetchError")); setLossLoading(false); return; }
-      setLossData(json);
-    } catch (err) { setLossError(err instanceof Error ? err.message : tl("fetchError")); }
-    setLossLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      if (!res.ok) { setSoilingError(json.detail || json.error || tl("fetchError")); setSoilingLoading(false); return; }
+      setSoilingData(json);
+    } catch (err) { setSoilingError(err instanceof Error ? err.message : tl("fetchError")); }
+    setSoilingLoading(false);
   }, [getToken, tl]);
 
   const fetchPanels = useCallback(async () => {
@@ -314,16 +317,26 @@ export default function DashboardPage() {
             </div>
 
             {/* System Health */}
-            <div className="rounded-2xl border border-border bg-surface p-5">
-              <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-accent-light">
-                <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <p className="text-sm text-muted">{ta("systemHealth")}</p>
-              <p className="mt-1 text-2xl font-bold text-accent">{ta("healthGood")}</p>
-              <p className="mt-1 text-xs text-muted-light">{ta("allSystemsNormal")}</p>
-            </div>
+            {(() => {
+              const loss = soilingData?.summary.current_loss_pct;
+              const level = loss != null ? (loss > 15 ? "poor" : loss > 5 ? "fair" : "good") : "good";
+              const bg = { good: "bg-accent-light", fair: "bg-brand-light", poor: "bg-red-100 dark:bg-red-900/30" }[level];
+              const clr = { good: "text-accent", fair: "text-brand", poor: "text-red-500" }[level];
+              const label = { good: ta("healthGood"), fair: ta("healthFair"), poor: ta("healthPoor") }[level];
+              const desc = { good: ta("allSystemsNormal"), fair: ta("healthFairDesc"), poor: ta("healthPoorDesc") }[level];
+              return (
+                <div className="rounded-2xl border border-border bg-surface p-5">
+                  <div className={`mb-2 flex h-9 w-9 items-center justify-center rounded-xl ${bg}`}>
+                    <svg className={`h-5 w-5 ${clr}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <p className="text-sm text-muted">{ta("systemHealth")}</p>
+                  <p className={`mt-1 text-2xl font-bold ${clr}`}>{label}</p>
+                  <p className="mt-1 text-xs text-muted-light">{desc}</p>
+                </div>
+              );
+            })()}
 
             {/* Monthly Savings */}
             <div className="rounded-2xl border border-border bg-surface p-5">
@@ -365,103 +378,153 @@ export default function DashboardPage() {
         </>
       )}
 
-      {/* ── Loss Analysis Section ─────────────────────────────── */}
+      {/* ── Soiling Analysis Section ────────────────────────────── */}
       <div className="mb-8 rounded-2xl border border-border bg-surface p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-foreground">{tl("title")}</h2>
-          <button onClick={fetchLosses} disabled={lossLoading}
+          <button onClick={fetchSoiling} disabled={soilingLoading}
             className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:opacity-50">
-            {lossLoading ? tl("analyzing") : tl("runAnalysis")}
+            {soilingLoading ? tl("analyzing") : tl("runAnalysis")}
           </button>
         </div>
 
-        {lossError && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{lossError}</div>
+        {soilingError && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{soilingError}</div>
         )}
-        {!lossData && !lossError && !lossLoading && (
+        {!soilingData && !soilingError && !soilingLoading && (
           <p className="text-sm text-muted">{tl("description")}</p>
         )}
 
-        {lossData && (() => {
-          const { totals, daily } = lossData.losses;
-          const maxBar = Math.max(...daily.map((d) => d.clear_sky_expected_kwh));
+        {soilingData && (() => {
+          const { summary, daily, events, monetary } = soilingData;
+          const sym = monetary.currency_symbol;
           return (
             <>
+              {/* Summary cards */}
               <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-border p-4">
-                  <p className="text-xs text-muted">{tl("systemLoss")}</p>
-                  <p className={`mt-1 text-xl font-bold ${totals.system_loss_pct > 15 ? "text-red-600" : totals.system_loss_pct > 8 ? "text-brand" : "text-accent"}`}>
-                    {totals.system_loss_pct}%
+                  <p className="text-xs text-muted">{tl("soilingRatio")}</p>
+                  <p className={`mt-1 text-xl font-bold ${summary.current_sr >= 0.95 ? "text-accent" : summary.current_sr >= 0.90 ? "text-brand" : "text-red-600"}`}>
+                    {(summary.current_sr * 100).toFixed(1)}%
                   </p>
-                  <p className="text-xs text-muted-light">{totals.system_loss_kwh} kWh</p>
                 </div>
                 <div className="rounded-xl border border-border p-4">
-                  <p className="text-xs text-muted">{tl("cloudLoss")}</p>
-                  <p className="mt-1 text-xl font-bold text-muted">{totals.cloud_loss_pct}%</p>
-                  <p className="text-xs text-muted-light">{totals.cloud_loss_kwh} kWh</p>
+                  <p className="text-xs text-muted">{tl("currentLoss")}</p>
+                  <p className={`mt-1 text-xl font-bold ${summary.current_loss_pct > 15 ? "text-red-600" : summary.current_loss_pct > 5 ? "text-brand" : "text-accent"}`}>
+                    {summary.current_loss_pct.toFixed(1)}%
+                  </p>
                 </div>
-                <MetricCard label={tl("actualProduction")} value={`${totals.actual_kwh} kWh`} />
-                <MetricCard label={tl("clearSkyPotential")} value={`${totals.clear_sky_expected_kwh} kWh`} />
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-xs text-muted">{tl("totalLostEnergy")}</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{Math.round(summary.total_lost_kwh)} kWh</p>
+                </div>
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-xs text-muted">{tl("cleaningEvents")}</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{summary.n_cleaning_events}</p>
+                </div>
               </div>
 
-              {lossData.monetary && (() => {
-                const sym = lossData.monetary.currency_symbol;
-                return (
-                  <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-                      <p className="text-xs text-muted">{tl("moneyLossToday")}</p>
-                      <p className="mt-1 text-xl font-bold text-red-600">{sym}{lossData.monetary.loss_today.toFixed(2)}</p>
-                      <p className="text-xs text-muted-light">{tl("perDay")}: {sym}{lossData.monetary.avg_daily_loss.toFixed(2)}</p>
-                    </div>
-                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-                      <p className="text-xs text-muted">{tl("moneyLoss7d")}</p>
-                      <p className="mt-1 text-xl font-bold text-red-600">{sym}{lossData.monetary.loss_7d.toFixed(2)}</p>
-                    </div>
-                    <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
-                      <p className="text-xs text-muted">{tl("moneyLossMonthly")}</p>
-                      <p className="mt-1 text-xl font-bold text-brand">{sym}{lossData.monetary.loss_monthly_projected.toFixed(2)}</p>
-                      <p className="text-xs text-muted-light">{tl("projected")}</p>
-                    </div>
-                    <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
-                      <p className="text-xs text-muted">{tl("moneyLossYearly")}</p>
-                      <p className="mt-1 text-xl font-bold text-brand">{sym}{lossData.monetary.loss_yearly_projected.toFixed(2)}</p>
-                      <p className="text-xs text-muted-light">{tl("projected")}</p>
-                    </div>
+              {/* Seasonal rates */}
+              <div className="mb-6 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-xs text-muted">{tl("lossSinceClean")}</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{summary.loss_since_last_clean.toFixed(1)}%</p>
+                </div>
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-xs text-muted">{tl("summerRate")}</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{summary.avg_summer_rate.toFixed(2)} {tl("perDay")}</p>
+                </div>
+                <div className="rounded-xl border border-border p-4">
+                  <p className="text-xs text-muted">{tl("winterRate")}</p>
+                  <p className="mt-1 text-xl font-bold text-foreground">{summary.avg_winter_rate.toFixed(2)} {tl("perDay")}</p>
+                </div>
+              </div>
+
+              {/* Monetary */}
+              {monetary.currency_per_kwh > 0 ? (
+                <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
+                    <p className="text-xs text-muted">{tl("moneyLossMonthly")}</p>
+                    <p className="mt-1 text-xl font-bold text-brand">{sym}{monetary.loss_monthly_projected.toFixed(2)}</p>
+                    <p className="text-xs text-muted-light">{tl("projected")}</p>
                   </div>
-                );
-              })()}
-              {!lossData.monetary && (
+                  <div className="rounded-xl border border-brand/20 bg-brand-light/30 p-4 dark:border-orange-800 dark:bg-orange-900/10">
+                    <p className="text-xs text-muted">{tl("moneyLossYearly")}</p>
+                    <p className="mt-1 text-xl font-bold text-brand">{sym}{monetary.loss_yearly_projected.toFixed(2)}</p>
+                    <p className="text-xs text-muted-light">{tl("projected")}</p>
+                  </div>
+                  <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
+                    <p className="text-xs text-muted">{tl("totalLostMoney")}</p>
+                    <p className="mt-1 text-xl font-bold text-red-600">{sym}{monetary.total_lost_money.toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
+                    <p className="text-xs text-muted">{tl("annualAvgLoss")}</p>
+                    <p className="mt-1 text-xl font-bold text-red-600">{sym}{monetary.annual_avg_loss.toFixed(2)}</p>
+                    <p className="text-xs text-muted-light">{tl("avgDailyLoss")}: {sym}{monetary.avg_daily_loss.toFixed(2)}</p>
+                  </div>
+                </div>
+              ) : (
                 <div className="mb-6 rounded-xl border border-border bg-surface-hover p-4 text-sm text-muted">{tl("noPriceSet")}</div>
               )}
 
-              <h3 className="mb-3 text-sm font-medium text-muted">{tl("dailyBreakdown")}</h3>
-              <div className="flex items-end gap-2" style={{ height: 220 }}>
+              {/* Soiling Timeline */}
+              <h3 className="mb-3 text-sm font-medium text-muted">{tl("soilingTimeline")}</h3>
+              <div className="flex items-end gap-px" style={{ height: 160 }}>
                 {daily.map((d) => {
-                  const actualPct = (d.actual_kwh / (maxBar || 1)) * 100;
-                  const cloudPct = (d.cloud_loss_kwh / (maxBar || 1)) * 100;
-                  const sysPct = (d.system_loss_kwh / (maxBar || 1)) * 100;
+                  const sr = d.soiling_ratio;
+                  if (sr == null) return <div key={d.date} className="flex-1" />;
+                  const pct = Math.max(0, Math.min(100, ((sr - 0.8) / 0.2) * 100));
+                  const barColor = sr >= 0.95 ? "bg-accent/70" : sr >= 0.90 ? "bg-brand/70" : "bg-red-400";
                   return (
                     <div key={d.date} className="group relative flex flex-1 flex-col items-center" style={{ height: "100%" }}>
-                      <div className="flex w-full flex-1 flex-col-reverse">
-                        <div className="w-full bg-brand/70" style={{ height: `${actualPct}%`, minHeight: actualPct > 0 ? 2 : 0 }} />
-                        <div className="w-full bg-muted-light/30" style={{ height: `${cloudPct}%`, minHeight: cloudPct > 0 ? 1 : 0 }} />
-                        <div className="w-full rounded-t bg-red-400" style={{ height: `${sysPct}%`, minHeight: sysPct > 0 ? 1 : 0 }} />
+                      <div className="flex w-full flex-1 items-end">
+                        <div className={`w-full rounded-t-sm ${barColor} opacity-80 transition-opacity group-hover:opacity-100`}
+                             style={{ height: `${pct}%`, minHeight: pct > 0 ? 2 : 0 }} />
                       </div>
-                      <p className="mt-2 text-[10px] text-muted-light">{d.date.slice(5)}</p>
-                      <div className="pointer-events-none absolute -top-12 z-10 w-max rounded-lg bg-brand-secondary px-2 py-1 text-[10px] leading-relaxed text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-                        {tl("actual")}: {d.actual_kwh} kWh<br />
-                        {tl("cloudLossShort")}: {d.cloud_loss_kwh} kWh<br />
-                        {tl("systemLossShort")}: {d.system_loss_kwh} kWh
+                      {d.cleaning && <div className="absolute top-0 h-1.5 w-1.5 rounded-full bg-blue-500" />}
+                      <div className="pointer-events-none absolute -top-10 z-10 w-max rounded-lg bg-brand-secondary px-2 py-1 text-[10px] leading-relaxed text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                        {d.date.slice(5)}: {(sr * 100).toFixed(1)}%{d.cleaning ? " ✦" : ""}
                       </div>
                     </div>
                   );
                 })}
               </div>
               <div className="mt-3 flex gap-4 text-xs text-muted">
-                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-brand/70" />{tl("actual")}</span>
-                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-muted-light/30" />{tl("cloudLossShort")}</span>
-                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-red-400" />{tl("systemLossShort")}</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-accent/70" />&gt;95%</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-brand/70" />90–95%</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-red-400" />&lt;90%</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-blue-500" />{tl("cleaningEvents")}</span>
               </div>
+
+              {/* Cleaning Events */}
+              {events.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="mb-3 text-sm font-medium text-muted">{tl("cleaningEventsList")}</h3>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {events.map((ev) => (
+                      <div key={ev.date} className="flex items-center gap-3 rounded-xl border border-border p-3">
+                        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${ev.type === "rain" ? "bg-blue-100 dark:bg-blue-900/30" : "bg-surface-hover"}`}>
+                          {ev.type === "rain" ? (
+                            <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" /></svg>
+                          ) : (
+                            <svg className="h-4 w-4 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">{ev.date}</p>
+                          <p className="truncate text-xs text-muted">
+                            {ev.type === "rain" ? tl("eventRain") : tl("eventManual")}
+                            {ev.type === "rain" && ev.rain_mm > 0 && ` · ${tl("rainMm", { mm: ev.rain_mm.toFixed(1) })}`}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Analysis range */}
+              <p className="mt-6 text-xs text-muted-light">{tl("analysisRange", { start: summary.analysis_start, end: summary.analysis_end, days: summary.n_days })}</p>
             </>
           );
         })()}

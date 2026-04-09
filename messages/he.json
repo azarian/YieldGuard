@@ -169,7 +169,11 @@
     "todayEnergy": "אנרגיה היום",
     "systemHealth": "תקינות המערכת",
     "healthGood": "תקין",
+    "healthFair": "סביר",
+    "healthPoor": "לקוי",
     "allSystemsNormal": "כל המערכות פועלות כרגיל",
+    "healthFairDesc": "זוהתה מלוכלכות בינונית",
+    "healthPoorDesc": "אובדן מלוכלכות גבוה — מומלץ לנקות",
     "monthlySavings": "חיסכון חודשי"
   },
   "losses": {

@@ -169,7 +169,11 @@
     "todayEnergy": "Today's Energy",
     "systemHealth": "System Health",
     "healthGood": "Good",
+    "healthFair": "Fair",
+    "healthPoor": "Poor",
     "allSystemsNormal": "All systems operating normally",
+    "healthFairDesc": "Moderate soiling detected",
+    "healthPoorDesc": "High soiling loss — cleaning recommended",
     "monthlySavings": "Monthly Savings"
   },
   "losses": {
