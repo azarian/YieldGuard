@@ -29,7 +29,7 @@ interface LossDay { date: string; actual_kwh: number; weather_expected_kwh: numb
 interface MonetaryLoss { currency_per_kwh: number; currency: string; currency_symbol: string; loss_today: number; loss_7d: number; loss_monthly_projected: number; loss_yearly_projected: number; avg_daily_loss: number }
 interface LossResult {
   losses: { totals: { actual_kwh: number; weather_expected_kwh: number; clear_sky_expected_kwh: number; cloud_loss_kwh: number; system_loss_kwh: number; system_loss_pct: number; cloud_loss_pct: number }; daily: LossDay[] };
-  monetary: MonetaryLoss | null; recommendations_created: number;
+  monetary: MonetaryLoss | null;
 }
 
 interface PanelData {
