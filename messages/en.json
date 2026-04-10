@@ -206,18 +206,7 @@
     "eventManual": "Manual / unknown",
     "rainMm": "{mm} mm rain",
     "noEvents": "No cleaning events detected.",
-    "analysisRange": "Analysis: {start} – {end} ({days} days)",
-    "seasonalRates": "Seasonal Soiling Rates",
-    "systemLoss": "System Loss (Dirt/Shade)",
-    "cloudLoss": "Cloud Impact",
-    "actualProduction": "Actual Production",
-    "clearSkyPotential": "Clear Sky Potential",
-    "dailyBreakdown": "Daily Breakdown",
-    "actual": "Actual",
-    "cloudLossShort": "Cloud loss",
-    "systemLossShort": "System loss",
-    "moneyLossToday": "Lost Revenue Today",
-    "moneyLoss7d": "Lost Revenue (7 Days)"
+    "analysisRange": "Analysis: {start} – {end} ({days} days)"
   },
   "sync": {
     "syncNow": "Sync Data",

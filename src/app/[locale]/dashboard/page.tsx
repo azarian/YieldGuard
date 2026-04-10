@@ -136,16 +136,21 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
   }, []);
 
+  async function safeJson(res: Response): Promise<Record<string, unknown>> {
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return { error: text || res.statusText || "Server error" }; }
+  }
+
   const fetchAnalysis = useCallback(async () => {
     setAnalysisLoading(true); setAnalysisError(null);
     const token = await getToken();
     if (!token) { setAnalysisError(ta("notAuthenticated")); setAnalysisLoading(false); return; }
     try {
       const res = await fetch("/api/py/analyze", { headers: { Authorization: `Bearer ${token}` } });
-      const json = await res.json();
-      if (!res.ok) { setAnalysisError(json.detail || json.error || ta("fetchError")); setAnalysisLoading(false); return; }
-      setData(json);
-    } catch (err) { setAnalysisError(err instanceof Error ? err.message : ta("fetchError")); }
+      const json = await safeJson(res);
+      if (!res.ok) { setAnalysisError((json.detail || json.error || ta("fetchError")) as string); setAnalysisLoading(false); return; }
+      setData(json as unknown as AnalysisResult);
+    } catch { setAnalysisError(ta("fetchError")); }
     setAnalysisLoading(false);
   }, [getToken, ta]);
 
@@ -155,10 +160,10 @@ export default function DashboardPage() {
     if (!token) { setSoilingError(tl("notAvailable")); setSoilingLoading(false); return; }
     try {
       const res = await fetch("/api/py/analyze/soiling", { headers: { Authorization: `Bearer ${token}` } });
-      const json = await res.json();
-      if (!res.ok) { setSoilingError(json.detail || json.error || tl("fetchError")); setSoilingLoading(false); return; }
-      setSoilingData(json);
-    } catch (err) { setSoilingError(err instanceof Error ? err.message : tl("fetchError")); }
+      const json = await safeJson(res);
+      if (!res.ok) { setSoilingError((json.detail || json.error || tl("fetchError")) as string); setSoilingLoading(false); return; }
+      setSoilingData(json as unknown as SoilingResult);
+    } catch { setSoilingError(tl("fetchError")); }
     setSoilingLoading(false);
   }, [getToken, tl]);
 
@@ -168,8 +173,8 @@ export default function DashboardPage() {
     if (!token) { setPanelLoading(false); return; }
     try {
       const res = await fetch("/api/py/analyze/panels", { headers: { Authorization: `Bearer ${token}` } });
-      const json = await res.json();
-      if (res.ok && json.panels) setPanelData(json.panels);
+      const json = await safeJson(res);
+      if (res.ok && json.panels) setPanelData(json.panels as unknown as PanelData[]);
     } catch { /* ignore */ }
     setPanelLoading(false);
   }, [getToken]);

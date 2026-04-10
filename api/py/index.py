@@ -25,8 +25,6 @@ app = FastAPI(title="YieldGuard Analytics", version="0.4.0")
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
-SYSTEM_EFFICIENCY = 0.80
-OPEN_METEO_BASE = "https://archive-api.open-meteo.com/v1/archive"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -120,44 +118,6 @@ async def _get_system(token: str) -> dict:
     if not systems:
         raise HTTPException(status_code=404, detail="No solar system registered")
     return systems[0]
-
-
-# ── Open-Meteo ───────────────────────────────────────────────────────────────
-
-
-async def _fetch_irradiance(lat: float, lng: float, start: str, end: str) -> dict[str, list]:
-    params = {
-        "latitude": lat,
-        "longitude": lng,
-        "start_date": start,
-        "end_date": end,
-        "hourly": "shortwave_radiation,shortwave_radiation_clear_sky",
-        "timezone": "UTC",
-    }
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(OPEN_METEO_BASE, params=params)
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Open-Meteo API error: {resp.text}")
-        data = resp.json()
-
-    hourly = data.get("hourly", {})
-    return {
-        "time": hourly.get("time", []),
-        "actual": hourly.get("shortwave_radiation", []),
-        "clear_sky": hourly.get("shortwave_radiation_clear_sky", []),
-    }
-
-
-def _build_irradiance_map(irradiance: dict[str, list]) -> dict[str, tuple[float, float]]:
-    result: dict[str, tuple[float, float]] = {}
-    times = irradiance["time"]
-    actual = irradiance["actual"]
-    clear_sky = irradiance["clear_sky"]
-    for i, t in enumerate(times):
-        a = actual[i] if i < len(actual) and actual[i] is not None else 0.0
-        c = clear_sky[i] if i < len(clear_sky) and clear_sky[i] is not None else 0.0
-        result[t] = (a, c)
-    return result
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -259,12 +219,11 @@ async def analyze(request: Request):
     # Get peak power from telemetry
     peak_kw = 0.0
     peak_time = ""
+    all_power: dict[str, float] = {}
     equipment_rows = await _supabase_query(
         token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
     )
     if equipment_rows:
-        # Sum power across all equipment per timestamp for site-level peak
-        all_power: dict[str, float] = {}
         for eq in equipment_rows:
             tele = await _supabase_query(
                 token,
@@ -312,6 +271,35 @@ async def analyze(request: Request):
             "total_intervals": total_count,
         }
 
+    # ── Overview (hero card data) ────────────────────────────────
+    last_day_kwh = daily_values[-1]["kwh"] if daily_values else 0
+
+    current_power_kw = 0.0
+    if all_power:
+        latest_ts = max(all_power.keys())
+        if latest_ts[:10] == end_date.isoformat():
+            current_power_kw = round(all_power[latest_ts] / 1000, 2)
+
+    all_daily = await _supabase_query(
+        token, "site_energy_daily",
+        {"select": "date,energy_wh", "system_id": f"eq.{system_id}", "order": "date.asc", "limit": "10000"},
+    )
+    lifetime_wh = sum(r.get("energy_wh", 0) or 0 for r in all_daily)
+    month_start = end_date.replace(day=1).isoformat()
+    month_wh = sum(
+        (r.get("energy_wh", 0) or 0)
+        for r in all_daily
+        if r.get("date", "") >= month_start
+    )
+
+    analysis["overview"] = {
+        "lifetime_mwh": round(lifetime_wh / 1_000_000, 2),
+        "last_month_kwh": round(month_wh / 1000, 2),
+        "last_day_kwh": last_day_kwh,
+        "current_power_kw": current_power_kw,
+        "is_producing": current_power_kw > 0,
+    }
+
     return {
         "system": {
             "system_name": system["system_name"],
@@ -323,204 +311,7 @@ async def analyze(request: Request):
     }
 
 
-# ── Loss Analysis (reads from equipment_telemetry) ───────────────────────────
-
-
-def _compute_losses(
-    power_entries: list[dict],
-    irradiance_map: dict[str, tuple[float, float]],
-    peak_kwp: float,
-) -> dict:
-    """Compare actual power readings against weather-adjusted and clear-sky expectations."""
-    interval_hours = 0.25
-    daily: dict[str, dict] = {}
-
-    for entry in power_entries:
-        ts_str = entry.get("ts", "")
-        actual_w = entry.get("power_w") or 0.0
-
-        try:
-            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            continue
-
-        date_key = dt.strftime("%Y-%m-%d")
-        hour_key = dt.strftime("%Y-%m-%dT%H:00")
-
-        actual_irr, clear_sky_irr = irradiance_map.get(hour_key, (0.0, 0.0))
-
-        weather_expected_w = (actual_irr / 1000.0) * peak_kwp * 1000.0 * SYSTEM_EFFICIENCY
-        clear_sky_expected_w = (clear_sky_irr / 1000.0) * peak_kwp * 1000.0 * SYSTEM_EFFICIENCY
-
-        actual_wh = actual_w * interval_hours
-        weather_expected_wh = weather_expected_w * interval_hours
-        clear_sky_expected_wh = clear_sky_expected_w * interval_hours
-
-        cloud_loss_wh = max(0.0, clear_sky_expected_wh - weather_expected_wh)
-        system_loss_wh = max(0.0, weather_expected_wh - actual_wh)
-
-        if date_key not in daily:
-            daily[date_key] = {
-                "actual_wh": 0.0,
-                "weather_expected_wh": 0.0,
-                "clear_sky_expected_wh": 0.0,
-                "cloud_loss_wh": 0.0,
-                "system_loss_wh": 0.0,
-            }
-        d = daily[date_key]
-        d["actual_wh"] += actual_wh
-        d["weather_expected_wh"] += weather_expected_wh
-        d["clear_sky_expected_wh"] += clear_sky_expected_wh
-        d["cloud_loss_wh"] += cloud_loss_wh
-        d["system_loss_wh"] += system_loss_wh
-
-    total_actual = 0.0
-    total_weather_exp = 0.0
-    total_clear_sky = 0.0
-    total_cloud_loss = 0.0
-    total_system_loss = 0.0
-    days = []
-
-    for date_key in sorted(daily):
-        d = daily[date_key]
-        total_actual += d["actual_wh"]
-        total_weather_exp += d["weather_expected_wh"]
-        total_clear_sky += d["clear_sky_expected_wh"]
-        total_cloud_loss += d["cloud_loss_wh"]
-        total_system_loss += d["system_loss_wh"]
-        days.append({
-            "date": date_key,
-            "actual_kwh": round(d["actual_wh"] / 1000, 2),
-            "weather_expected_kwh": round(d["weather_expected_wh"] / 1000, 2),
-            "clear_sky_expected_kwh": round(d["clear_sky_expected_wh"] / 1000, 2),
-            "cloud_loss_kwh": round(d["cloud_loss_wh"] / 1000, 2),
-            "system_loss_kwh": round(d["system_loss_wh"] / 1000, 2),
-        })
-
-    system_loss_pct = (total_system_loss / total_weather_exp * 100) if total_weather_exp > 0 else 0
-    cloud_loss_pct = (total_cloud_loss / total_clear_sky * 100) if total_clear_sky > 0 else 0
-
-    return {
-        "totals": {
-            "actual_kwh": round(total_actual / 1000, 2),
-            "weather_expected_kwh": round(total_weather_exp / 1000, 2),
-            "clear_sky_expected_kwh": round(total_clear_sky / 1000, 2),
-            "cloud_loss_kwh": round(total_cloud_loss / 1000, 2),
-            "system_loss_kwh": round(total_system_loss / 1000, 2),
-            "system_loss_pct": round(system_loss_pct, 1),
-            "cloud_loss_pct": round(cloud_loss_pct, 1),
-        },
-        "daily": days,
-    }
-
-CURRENCY_SYMBOLS = {"ILS": "₪", "USD": "$", "EUR": "€"}
-
-
-def _compute_monetary(
-    losses: dict, price_per_kwh: float | None, currency: str = "ILS"
-) -> dict | None:
-    if not price_per_kwh or price_per_kwh <= 0:
-        return None
-
-    totals = losses["totals"]
-    daily = losses["daily"]
-    days_count = len(daily)
-
-    loss_7d = totals["system_loss_kwh"] * price_per_kwh
-    loss_today = (daily[-1]["system_loss_kwh"] * price_per_kwh) if daily else 0
-    avg_daily_loss_kwh = totals["system_loss_kwh"] / days_count if days_count > 0 else 0
-    avg_daily_loss_money = avg_daily_loss_kwh * price_per_kwh
-    loss_monthly_projected = avg_daily_loss_money * 30
-    loss_yearly_projected = avg_daily_loss_money * 365
-
-    return {
-        "currency_per_kwh": price_per_kwh,
-        "currency": currency,
-        "currency_symbol": CURRENCY_SYMBOLS.get(currency, currency),
-        "loss_today": round(loss_today, 2),
-        "loss_7d": round(loss_7d, 2),
-        "loss_monthly_projected": round(loss_monthly_projected, 2),
-        "loss_yearly_projected": round(loss_yearly_projected, 2),
-        "avg_daily_loss": round(avg_daily_loss_money, 2),
-    }
-
-
-@app.get("/api/py/analyze/losses")
-async def analyze_losses(request: Request):
-    token = _get_token(request)
-    system = await _get_system(token)
-    system_id = system["id"]
-
-    lat = system.get("latitude")
-    lng = system.get("longitude")
-    kwp = system.get("peak_power_kwp")
-
-    if not lat or not lng or not kwp:
-        raise HTTPException(
-            status_code=400,
-            detail="Site details (latitude, longitude, peak power) are not available. Please sync your system first.",
-        )
-
-    end_date = datetime.now(timezone.utc).date()
-    start_date = end_date - timedelta(days=7)
-
-    # Get all equipment for this system
-    equipment = await _supabase_query(
-        token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
-    )
-
-    if not equipment:
-        raise HTTPException(status_code=404, detail="No equipment found. Please sync first.")
-
-    # Aggregate site-level power per timestamp from telemetry
-    site_power: dict[str, float] = {}
-    for eq in equipment:
-        tele = await _supabase_query(
-            token,
-            "equipment_telemetry",
-            {
-                "select": "ts,power_w",
-                "equipment_id": f"eq.{eq['id']}",
-                "ts": f"gte.{start_date.isoformat()}",
-                "order": "ts.asc",
-            },
-        )
-        for t in tele:
-            pw = t.get("power_w") or 0.0
-            site_power[t["ts"]] = site_power.get(t["ts"], 0) + pw
-
-    if not site_power:
-        raise HTTPException(status_code=404, detail="No telemetry data available for loss analysis.")
-
-    power_entries = [{"ts": ts, "power_w": pw} for ts, pw in sorted(site_power.items())]
-
-    # Fetch irradiance
-    irradiance = await _fetch_irradiance(lat, lng, start_date.isoformat(), end_date.isoformat())
-    irradiance_map = _build_irradiance_map(irradiance)
-
-    losses = _compute_losses(power_entries, irradiance_map, kwp)
-
-    return {
-        "system": {
-            "name": system["system_name"],
-            "site_id": system["site_id"],
-            "peak_power_kwp": kwp,
-            "latitude": lat,
-            "longitude": lng,
-        },
-        "losses": losses,
-        "monetary": _compute_monetary(
-            losses,
-            system.get("electricity_price_per_kwh"),
-            system.get("currency", "ILS"),
-        ),
-        "analyzed_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-
-
-# ── Soiling Analysis (new — uses SoilingAnalyzer + site_energy_15min) ────────
+# ── Soiling Analysis (uses SoilingAnalyzer + site_energy_15min) ───────────────
 
 
 @app.get("/api/py/analyze/soiling")

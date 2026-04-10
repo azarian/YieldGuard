@@ -206,18 +206,7 @@
     "eventManual": "ידני / לא ידוע",
     "rainMm": "{mm} מ\"מ גשם",
     "noEvents": "לא זוהו אירועי ניקוי.",
-    "analysisRange": "ניתוח: {start} – {end} ({days} ימים)",
-    "seasonalRates": "קצבי מלוכלכות עונתיים",
-    "systemLoss": "אובדן מערכת (לכלוך/הצללה)",
-    "cloudLoss": "השפעת עננות",
-    "actualProduction": "ייצור בפועל",
-    "clearSkyPotential": "פוטנציאל שמיים בהירים",
-    "dailyBreakdown": "פירוט יומי",
-    "actual": "בפועל",
-    "cloudLossShort": "אובדן עננות",
-    "systemLossShort": "אובדן מערכת",
-    "moneyLossToday": "הכנסה שאבדה היום",
-    "moneyLoss7d": "הכנסה שאבדה (7 ימים)"
+    "analysisRange": "ניתוח: {start} – {end} ({days} ימים)"
   },
   "sync": {
     "syncNow": "סנכרון נתונים",
