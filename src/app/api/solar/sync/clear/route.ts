@@ -1,6 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 
+const WORKER_MAP: Record<string, string> = {
+  inverter: "inverter_telemetry",
+  site_energy: "site_energy_15min",
+  optimizer: "optimizer_telemetry",
+};
+
 export async function DELETE(request: NextRequest) {
   const supabase = await createClient();
 
@@ -32,13 +38,14 @@ export async function DELETE(request: NextRequest) {
   }
 
   const systemId = system.id;
+  const workerId = WORKER_MAP[type];
 
-  // Always clear sync_coverage for this type
+  // Clear data_coverage for this worker
   await supabase
-    .from("sync_coverage")
+    .from("data_coverage")
     .delete()
     .eq("system_id", systemId)
-    .eq("source", type);
+    .eq("worker_id", workerId);
 
   if (type === "site_energy") {
     await supabase
@@ -50,7 +57,6 @@ export async function DELETE(request: NextRequest) {
   }
 
   const eqType = type === "inverter" ? "inverter" : "optimizer";
-  const source = type === "inverter" ? "public_api" : "portal_api";
 
   const { data: equipment } = await supabase
     .from("equipment")
@@ -71,13 +77,6 @@ export async function DELETE(request: NextRequest) {
       .delete()
       .eq("equipment_id", eqId);
   }
-
-  // Delete fetched_periods for these equipment
-  await supabase
-    .from("fetched_periods")
-    .delete()
-    .in("equipment_id", equipIds)
-    .eq("source", source);
 
   return NextResponse.json({
     cleared: type,

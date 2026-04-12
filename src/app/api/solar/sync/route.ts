@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
     const desiredStartStr = formatDate(startFrom);
     const desiredEndStr = formatDate(endAt);
 
-    // Build chunks using gap analysis against fetched_periods
+    // Build chunks using gap analysis against data_coverage
     const chunks: Array<{
       equipment_id: string;
       period_start: string;
@@ -181,17 +181,18 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const equip of dbEquipment) {
-      const { data: fetchedPeriods } = await supabase
-        .from("fetched_periods")
+      const { data: coveredPeriods } = await supabase
+        .from("data_coverage")
         .select("period_start, period_end")
+        .eq("system_id", systemId)
+        .eq("worker_id", "inverter_telemetry")
         .eq("equipment_id", equip.id)
-        .eq("source", "public_api")
         .order("period_start", { ascending: true });
 
       const gaps = computeGaps(
         desiredStartStr,
         desiredEndStr,
-        fetchedPeriods ?? []
+        coveredPeriods ?? []
       );
 
       const chunkSize = 7;

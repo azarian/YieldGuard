@@ -228,17 +228,18 @@ export async function POST(request: NextRequest) {
       const internalId = snToInternalId.get(dbOpt.serial_number);
       if (!internalId) continue;
 
-      const { data: fetchedPeriods } = await supabase
-        .from("fetched_periods")
+      const { data: coveredPeriods } = await supabase
+        .from("data_coverage")
         .select("period_start, period_end")
+        .eq("system_id", systemId)
+        .eq("worker_id", "optimizer_telemetry")
         .eq("equipment_id", dbOpt.id)
-        .eq("source", "portal_api")
         .order("period_start", { ascending: true });
 
       const gaps = computeGaps(
         desiredStartStr,
         desiredEndStr,
-        fetchedPeriods ?? []
+        coveredPeriods ?? []
       );
 
       for (const gap of gaps) {

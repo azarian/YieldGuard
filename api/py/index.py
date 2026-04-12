@@ -140,10 +140,10 @@ async def analyze(request: Request):
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=7)
 
-    # Fetch daily energy from site_energy_daily
+    # Fetch daily energy from daily_energy table
     daily_rows = await _supabase_query(
         token,
-        "site_energy_daily",
+        "daily_energy",
         {
             "select": "date,energy_wh",
             "system_id": f"eq.{system_id}",
@@ -152,37 +152,50 @@ async def analyze(request: Request):
         },
     )
 
-    # If no site_energy_daily data, try to aggregate from equipment_telemetry
+    # If no daily_energy data, aggregate from equipment_telemetry.
+    # NOTE: energy_wh in equipment_telemetry is a CUMULATIVE lifetime counter
+    # (totalEnergy from SolarEdge API), NOT incremental per-interval energy.
+    # We compute energy from power × interval_hours, where the interval is
+    # determined dynamically from consecutive timestamps (~5 min for SolarEdge).
+    # Only inverter data is used (to avoid double-counting with optimizer data).
     if not daily_rows:
         equipment_rows = await _supabase_query(
-            token, "equipment", {"select": "id", "system_id": f"eq.{system_id}"},
+            token, "equipment",
+            {"select": "id", "system_id": f"eq.{system_id}", "equipment_type": "eq.inverter"},
         )
         if equipment_rows:
-            equip_ids = [e["id"] for e in equipment_rows]
-            # Fetch telemetry for the last 7 days
             all_telemetry = []
-            for eid in equip_ids:
+            for eq in equipment_rows:
                 tele = await _supabase_query(
                     token,
                     "equipment_telemetry",
                     {
-                        "select": "ts,energy_wh,power_w",
-                        "equipment_id": f"eq.{eid}",
+                        "select": "ts,power_w",
+                        "equipment_id": f"eq.{eq['id']}",
                         "ts": f"gte.{start_date.isoformat()}",
                         "order": "ts.asc",
                     },
                 )
                 all_telemetry.extend(tele)
 
-            # Aggregate into daily sums
+            # Sort by timestamp and compute energy using actual intervals
+            all_telemetry.sort(key=lambda t: t["ts"])
             daily_agg: dict[str, float] = {}
-            for t in all_telemetry:
+            for i, t in enumerate(all_telemetry):
+                power = t.get("power_w") or 0
+                if power <= 0:
+                    continue
+                # Compute interval in hours from gap to next reading (or previous)
+                if i + 1 < len(all_telemetry):
+                    ts_cur = datetime.fromisoformat(t["ts"])
+                    ts_next = datetime.fromisoformat(all_telemetry[i + 1]["ts"])
+                    interval_h = (ts_next - ts_cur).total_seconds() / 3600
+                else:
+                    interval_h = 5 / 60  # default 5 min for last reading
+                # Clamp to reasonable range (1 min to 1 hour)
+                interval_h = max(1 / 60, min(1.0, interval_h))
                 d = t["ts"][:10]
-                val = t.get("energy_wh") or 0
-                if val:
-                    daily_agg[d] = daily_agg.get(d, 0) + val
-                elif t.get("power_w"):
-                    daily_agg[d] = daily_agg.get(d, 0) + (t["power_w"] * 0.25)
+                daily_agg[d] = daily_agg.get(d, 0) + (power * interval_h)
 
             daily_rows = [{"date": d, "energy_wh": v} for d, v in sorted(daily_agg.items())]
 
@@ -281,7 +294,7 @@ async def analyze(request: Request):
             current_power_kw = round(all_power[latest_ts] / 1000, 2)
 
     all_daily = await _supabase_query(
-        token, "site_energy_daily",
+        token, "daily_energy",
         {"select": "date,energy_wh", "system_id": f"eq.{system_id}", "order": "date.asc", "limit": "10000"},
     )
     lifetime_wh = sum(r.get("energy_wh", 0) or 0 for r in all_daily)
@@ -314,26 +327,35 @@ async def analyze(request: Request):
 # ── Soiling Analysis (uses SoilingAnalyzer + site_energy_15min) ───────────────
 
 
-@app.get("/api/py/analyze/soiling")
-async def analyze_soiling(request: Request):
+def _system_info(system: dict) -> dict:
+    """Extract system info block for soiling response."""
+    return {
+        "name": system["system_name"],
+        "site_id": system["site_id"],
+        "peak_power_kwp": system.get("peak_power_kwp"),
+        "latitude": system.get("latitude"),
+        "longitude": system.get("longitude"),
+    }
+
+
+def _validate_system_for_soiling(system: dict) -> None:
+    """Raise 400 if system lacks required fields for soiling analysis."""
+    if not system.get("latitude") or not system.get("longitude") or not system.get("peak_power_kwp"):
+        raise HTTPException(
+            status_code=400,
+            detail="Site details (latitude, longitude, peak power) are not available. Please sync your system first.",
+        )
+
+
+async def _run_soiling_analysis(token: str, system: dict) -> dict:
+    """Run the full soiling analysis pipeline and return formatted response."""
     from timezonefinder import TimezoneFinder
     from api.py.analysis_service import (
         SiteDataLoader, AnalysisOrchestrator, ResponseFormatter, build_system_config,
     )
 
-    token = _get_token(request)
-    system = await _get_system(token)
-    system_id = system["id"]
-
-    lat = system.get("latitude")
-    lng = system.get("longitude")
-    kwp = system.get("peak_power_kwp")
-
-    if not lat or not lng or not kwp:
-        raise HTTPException(
-            status_code=400,
-            detail="Site details (latitude, longitude, peak power) are not available. Please sync your system first.",
-        )
+    lat = system["latitude"]
+    lng = system["longitude"]
 
     tf = TimezoneFinder()
     tz_str = tf.timezone_at(lat=lat, lng=lng) or "UTC"
@@ -342,7 +364,7 @@ async def analyze_soiling(request: Request):
     start_date = end_date - timedelta(days=365)
 
     loader = SiteDataLoader(token)
-    energy_df = await loader.load_site_energy(system_id, start_date.isoformat(), end_date.isoformat())
+    energy_df = await loader.load_site_energy(system["id"], start_date.isoformat(), end_date.isoformat())
     precip_df = await loader.load_precipitation(lat, lng, start_date.isoformat(), end_date.isoformat())
 
     config = build_system_config(system, tz_str)
@@ -351,17 +373,141 @@ async def analyze_soiling(request: Request):
     price = system.get("electricity_price_per_kwh")
     currency = system.get("currency", "ILS")
 
-    response = ResponseFormatter.format(result, price, currency)
+    return ResponseFormatter.format(result, price, currency)
+
+
+@app.get("/api/py/analyze/soiling")
+async def analyze_soiling(request: Request):
+    """Return cached soiling analysis if fresh, or 404 if stale/missing."""
+    from api.py.analysis_service import AnalysisCache, compute_coverage_hash
+
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
+
+    _validate_system_for_soiling(system)
+
+    cache = AnalysisCache(token)
+    cached = await cache.get_cached(system_id, "soiling_analysis")
+
+    if not cached:
+        raise HTTPException(
+            status_code=404,
+            detail="No soiling analysis available. Run it from the Data Sync page.",
+        )
+
+    # Check if cache is still fresh
+    coverage_rows = await cache.get_coverage_rows(system_id, "site_energy_15min")
+    current_hash = compute_coverage_hash(coverage_rows)
+
+    if cached["coverage_hash"] != current_hash:
+        raise HTTPException(
+            status_code=404,
+            detail="Soiling analysis is outdated (new data synced). Re-run it from the Data Sync page.",
+        )
 
     return {
-        "system": {
-            "name": system["system_name"],
-            "site_id": system["site_id"],
-            "peak_power_kwp": kwp,
-            "latitude": lat,
-            "longitude": lng,
-        },
+        "system": _system_info(system),
+        **cached["summary"],
+        "daily": cached.get("daily_data") or [],
+        "events": cached.get("events") or [],
+        "analyzed_at": cached["computed_at"],
+        "cached": True,
+    }
+
+
+@app.post("/api/py/analyze/soiling/run")
+async def analyze_soiling_run(request: Request):
+    """Run soiling analysis if stale, return cached if fresh."""
+    from api.py.analysis_service import AnalysisCache, compute_coverage_hash
+
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
+
+    _validate_system_for_soiling(system)
+
+    cache = AnalysisCache(token)
+    coverage_rows = await cache.get_coverage_rows(system_id, "site_energy_15min")
+    current_hash = compute_coverage_hash(coverage_rows)
+
+    # Check if cache is still fresh
+    cached = await cache.get_cached(system_id, "soiling_analysis")
+    if cached and cached["coverage_hash"] == current_hash:
+        return {
+            "system": _system_info(system),
+            **cached["summary"],
+            "daily": cached.get("daily_data") or [],
+            "events": cached.get("events") or [],
+            "analyzed_at": cached["computed_at"],
+            "cached": True,
+        }
+
+    # Compute fresh analysis
+    response = await _run_soiling_analysis(token, system)
+
+    # Persist to cache
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=365)
+    await cache.save(
+        system_id=system_id,
+        worker_id="soiling_analysis",
+        coverage_hash=current_hash,
+        data_start=start_date.isoformat(),
+        data_end=end_date.isoformat(),
+        summary={k: v for k, v in response.items() if k not in ("daily", "events")},
+        daily_data=response.get("daily"),
+        events=response.get("events"),
+    )
+
+    return {
+        "system": _system_info(system),
         **response,
+        "cached": False,
+    }
+
+
+@app.post("/api/py/analyze/soiling/backfill")
+async def analyze_soiling_backfill(request: Request):
+    """Force full recomputation of soiling analysis, ignoring cache."""
+    from api.py.analysis_service import AnalysisCache, compute_coverage_hash
+
+    token = _get_token(request)
+    system = await _get_system(token)
+    system_id = system["id"]
+
+    _validate_system_for_soiling(system)
+
+    cache = AnalysisCache(token)
+
+    # Delete old cached result
+    await cache.delete(system_id, "soiling_analysis")
+
+    # Compute fresh analysis
+    response = await _run_soiling_analysis(token, system)
+
+    # Get current coverage hash and persist
+    coverage_rows = await cache.get_coverage_rows(system_id, "site_energy_15min")
+    current_hash = compute_coverage_hash(coverage_rows)
+
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=365)
+    await cache.save(
+        system_id=system_id,
+        worker_id="soiling_analysis",
+        coverage_hash=current_hash,
+        data_start=start_date.isoformat(),
+        data_end=end_date.isoformat(),
+        summary={k: v for k, v in response.items() if k not in ("daily", "events")},
+        daily_data=response.get("daily"),
+        events=response.get("events"),
+    )
+
+    return {
+        "system": _system_info(system),
+        **response,
+        "cached": False,
+        "backfilled": True,
     }
 
 # ── Per-Panel Analysis ───────────────────────────────────────────────────────

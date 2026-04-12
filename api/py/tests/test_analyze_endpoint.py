@@ -47,33 +47,39 @@ class TestAnalyzeLossesEndpoint:
         assert resp.status_code == 401
 
     @patch("api.py.index._get_system")
+    @patch("api.py.analysis_service.AnalysisCache.get_coverage_rows")
+    @patch("api.py.analysis_service.AnalysisCache.get_cached")
+    @patch("api.py.analysis_service.compute_coverage_hash")
     def test_returns_soiling_response(
-        self, mock_get_system, client, mock_system_row, sample_result,
+        self, mock_hash, mock_get_cached, mock_get_coverage,
+        mock_get_system, client, mock_system_row,
     ):
+        """GET /analyze/soiling returns cached result when cache is fresh."""
         mock_get_system.return_value = mock_system_row
+        mock_hash.return_value = "test_hash"
+        mock_get_coverage.return_value = [
+            {"period_start": "2024-01-01", "period_end": "2024-12-31", "status": "fetched"},
+        ]
+        mock_get_cached.return_value = {
+            "coverage_hash": "test_hash",
+            "summary": {
+                "summary": {"current_sr": 0.95},
+                "monetary": {"total_lost_money": 100},
+            },
+            "daily_data": [{"date": "2024-06-01", "soiling_ratio": 0.95}],
+            "events": [{"date": "2024-03-15", "type": "rain"}],
+            "computed_at": "2025-01-01T00:00:00Z",
+        }
 
-        with patch("api.py.analysis_service.SiteDataLoader") as MockLoader, \
-             patch("api.py.analysis_service.AnalysisOrchestrator") as MockOrch:
-
-            loader_inst = MagicMock()
-            loader_inst.load_site_energy = AsyncMock(return_value=MagicMock())
-            loader_inst.load_precipitation = AsyncMock(return_value=MagicMock())
-            MockLoader.return_value = loader_inst
-
-            MockOrch.run = AsyncMock(return_value=sample_result)
-
-            resp = client.get(
-                "/api/py/analyze/soiling",
-                headers={"Authorization": "Bearer test-token"},
-            )
+        resp = client.get(
+            "/api/py/analyze/soiling",
+            headers={"Authorization": "Bearer test-token"},
+        )
 
         assert resp.status_code == 200
         data = resp.json()
         assert "system" in data
-        assert "summary" in data
-        assert "daily" in data
-        assert "events" in data
-        assert "monetary" in data
+        assert data["cached"] is True
 
     @patch("api.py.index._get_system")
     def test_returns_400_when_missing_coords(self, mock_get_system, client, mock_system_row):

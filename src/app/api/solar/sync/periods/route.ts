@@ -30,17 +30,17 @@ export async function GET() {
   const inverterCount = equipment?.filter((e) => e.equipment_type === "inverter").length ?? 0;
   const optimizerCount = equipment?.filter((e) => e.equipment_type === "optimizer").length ?? 0;
 
-  // Fetch all sync_coverage for this system
+  // Fetch all data_coverage for this system
   const { data: coverage } = await supabase
-    .from("sync_coverage")
-    .select("source, period_start, period_end, status")
+    .from("data_coverage")
+    .select("worker_id, period_start, period_end, status")
     .eq("system_id", system.id)
     .order("period_start", { ascending: true });
 
   const allCoverage = coverage ?? [];
 
-  function getCoverageBySource(source: string) {
-    const records = allCoverage.filter((c) => c.source === source);
+  function getCoverageByWorker(workerId: string) {
+    const records = allCoverage.filter((c) => c.worker_id === workerId);
     const fetched = records.filter((c) => c.status === "fetched");
     const missing = records.filter((c) => c.status === "missing");
     return {
@@ -49,37 +49,9 @@ export async function GET() {
     };
   }
 
-  const inverter = getCoverageBySource("inverter");
-  const siteEnergy = getCoverageBySource("site_energy");
-  const optimizer = getCoverageBySource("optimizer");
-
-  // Fall back to fetched_periods for inverter/optimizer if sync_coverage is empty
-  // (backward compat for data synced before this migration)
-  if (inverter.fetched.length === 0 && inverterCount > 0) {
-    const inverterIds = equipment!.filter((e) => e.equipment_type === "inverter").map((e) => e.id);
-    const { data } = await supabase
-      .from("fetched_periods")
-      .select("period_start, period_end")
-      .in("equipment_id", inverterIds)
-      .eq("source", "public_api")
-      .order("period_start", { ascending: true });
-    if (data && data.length > 0) {
-      inverter.fetched = mergePeriods(data);
-    }
-  }
-
-  if (optimizer.fetched.length === 0 && optimizerCount > 0) {
-    const optimizerIds = equipment!.filter((e) => e.equipment_type === "optimizer").map((e) => e.id);
-    const { data } = await supabase
-      .from("fetched_periods")
-      .select("period_start, period_end")
-      .in("equipment_id", optimizerIds)
-      .eq("source", "portal_api")
-      .order("period_start", { ascending: true });
-    if (data && data.length > 0) {
-      optimizer.fetched = mergePeriods(data);
-    }
-  }
+  const inverter = getCoverageByWorker("inverter_telemetry");
+  const siteEnergy = getCoverageByWorker("site_energy_15min");
+  const optimizer = getCoverageByWorker("optimizer_telemetry");
 
   return NextResponse.json({
     installation_date: system.installation_date,

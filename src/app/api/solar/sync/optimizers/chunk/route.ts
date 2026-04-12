@@ -254,20 +254,15 @@ export async function POST(request: NextRequest) {
       .update({ status: "done" })
       .eq("id", chunk.id);
 
-    // Record the fetched period
-    await supabase.from("fetched_periods").insert({
-      equipment_id: chunk.equipment_id,
-      source: "portal_api",
-      period_start: chunk.period_start,
-      period_end: chunk.period_end,
-    });
-
-    await supabase.from("sync_coverage").insert({
+    // Record coverage so we never re-fetch this range
+    await supabase.from("data_coverage").insert({
       system_id: job.system_id,
-      source: "optimizer",
+      worker_id: "optimizer_telemetry",
+      equipment_id: chunk.equipment_id,
       period_start: chunk.period_start,
       period_end: chunk.period_end,
       status: rows.length > 0 ? "fetched" : "missing",
+      record_count: rows.length,
     });
 
     const newCompleted = job.completed_chunks + 1;

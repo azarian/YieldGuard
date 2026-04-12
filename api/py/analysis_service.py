@@ -8,6 +8,8 @@ into independently testable components.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -338,3 +340,116 @@ def _classify_event_type(row: pd.Series) -> str:
     """Classify a cleaning event row as rain or manual."""
     rain_mm = row.get("rain_mm", 0)
     return "rain" if rain_mm > 0.5 else "manual"
+
+
+# ── Analysis Result Caching ──────────────────────────────────────────────────
+
+
+def compute_coverage_hash(coverage_rows: list[dict]) -> str:
+    """Compute a deterministic hash of data_coverage rows.
+
+    Used to detect when upstream data has changed since the last analysis run.
+    The hash is based on sorted (period_start, period_end, status) tuples,
+    so it changes when new data is synced or coverage changes.
+    """
+    if not coverage_rows:
+        return hashlib.sha256(b"empty").hexdigest()[:16]
+
+    # Sort deterministically and hash the content
+    normalized = sorted(
+        (r.get("period_start", ""), r.get("period_end", ""), r.get("status", ""))
+        for r in coverage_rows
+    )
+    content = json.dumps(normalized, sort_keys=True)
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class AnalysisCache:
+    """Read/write analysis results from the analysis_results table."""
+
+    def __init__(self, token: str):
+        self._headers = {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+
+    async def get_coverage_rows(self, system_id: str, worker_id: str) -> list[dict]:
+        """Fetch data_coverage rows for a given system and worker."""
+        params = [
+            ("select", "period_start,period_end,status"),
+            ("system_id", f"eq.{system_id}"),
+            ("worker_id", f"eq.{worker_id}"),
+            ("order", "period_start.asc"),
+        ]
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/data_coverage",
+                headers=self._headers, params=params,
+            )
+        if resp.status_code != 200:
+            logger.warning("data_coverage query failed: %s", resp.text)
+            return []
+        return resp.json()
+
+    async def get_cached(self, system_id: str, worker_id: str) -> dict | None:
+        """Get a cached analysis result if it exists."""
+        params = [
+            ("select", "*"),
+            ("system_id", f"eq.{system_id}"),
+            ("worker_id", f"eq.{worker_id}"),
+            ("limit", "1"),
+        ]
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/analysis_results",
+                headers=self._headers, params=params,
+            )
+        if resp.status_code != 200:
+            return None
+        rows = resp.json()
+        return rows[0] if rows else None
+
+    async def save(
+        self,
+        system_id: str,
+        worker_id: str,
+        coverage_hash: str,
+        data_start: str,
+        data_end: str,
+        summary: dict,
+        daily_data: list | None = None,
+        events: list | None = None,
+    ) -> None:
+        """Upsert an analysis result."""
+        body = {
+            "system_id": system_id,
+            "worker_id": worker_id,
+            "coverage_hash": coverage_hash,
+            "data_start": data_start,
+            "data_end": data_end,
+            "summary": summary,
+            "daily_data": daily_data,
+            "events": events,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        headers = {**self._headers, "Prefer": "resolution=merge-duplicates,return=representation"}
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{SUPABASE_URL}/rest/v1/analysis_results"
+                "?on_conflict=system_id,worker_id",
+                headers=headers, json=body,
+            )
+        if resp.status_code not in (200, 201):
+            logger.warning("analysis_results upsert failed: %s", resp.text)
+
+    async def delete(self, system_id: str, worker_id: str) -> None:
+        """Delete a cached analysis result (for backfill)."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.delete(
+                f"{SUPABASE_URL}/rest/v1/analysis_results"
+                f"?system_id=eq.{system_id}&worker_id=eq.{worker_id}",
+                headers=self._headers,
+            )

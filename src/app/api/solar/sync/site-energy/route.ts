@@ -62,12 +62,12 @@ export async function POST(request: NextRequest) {
     if (!isNaN(userEnd.getTime()) && userEnd <= today) endDate = userEnd;
   }
 
-  // Check sync_coverage for already-covered periods (both fetched and missing)
+  // Check data_coverage for already-covered periods (both fetched and missing)
   const { data: coveredPeriods } = await supabase
-    .from("sync_coverage")
+    .from("data_coverage")
     .select("period_start, period_end")
     .eq("system_id", systemId)
-    .eq("source", "site_energy")
+    .eq("worker_id", "site_energy_15min")
     .order("period_start", { ascending: true });
 
   const { computeGaps } = await import("@/lib/sync-periods");
@@ -149,12 +149,13 @@ export async function POST(request: NextRequest) {
       }
 
       // Record coverage (fetched or missing)
-      await supabase.from("sync_coverage").insert({
+      await supabase.from("data_coverage").insert({
         system_id: systemId,
-        source: "site_energy",
+        worker_id: "site_energy_15min",
         period_start: reqStart,
         period_end: reqEnd,
         status: rows.length > 0 ? "fetched" : "missing",
+        record_count: rows.length,
       });
 
       cursor = addMonths(cursor, 1);
