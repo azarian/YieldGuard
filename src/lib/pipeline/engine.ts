@@ -284,6 +284,12 @@ export async function getStatus(
     .select("worker_id, period_start, period_end, status")
     .eq("system_id", systemId);
 
+  // Get analysis results for analysis workers' coverage
+  const { data: analysisResults } = await supabase
+    .from("analysis_results")
+    .select("worker_id, computed_at")
+    .eq("system_id", systemId);
+
   const stateMap = new Map(
     (states ?? []).map((s: WorkerState) => [s.worker_id, s])
   );
@@ -296,26 +302,42 @@ export async function getStatus(
   const installDate = system?.installation_date;
   const today = new Date().toISOString().split("T")[0];
 
+  const analysisResultMap = new Map(
+    (analysisResults ?? []).map((r) => [r.worker_id, r.computed_at])
+  );
+
   const workers: WorkerStatus[] = (workerDefs ?? []).map((def) => {
     const state = stateMap.get(def.id);
-    const workerCoverage = (coverage ?? []).filter(
-      (c) => c.worker_id === def.id && c.status === "fetched"
-    );
 
     // Compute coverage percentage
     let coveragePct = 0;
-    if (installDate && workerCoverage.length > 0) {
-      const totalDays = Math.max(
-        1,
-        (new Date(today).getTime() - new Date(installDate).getTime()) / 86400000
+
+    if (def.worker_type === "analysis") {
+      // Analysis workers: coverage = has a cached result or not
+      coveragePct = analysisResultMap.has(def.id) ? 100 : 0;
+    } else if (installDate) {
+      // Data workers: coverage = fetched days / total days since install
+      const workerCoverage = (coverage ?? []).filter(
+        (c) => c.worker_id === def.id && c.status === "fetched"
       );
-      const fetchedDays = workerCoverage.reduce((sum, c) => {
-        const start = new Date(c.period_start).getTime();
-        const end = new Date(c.period_end).getTime();
-        return sum + Math.max(0, (end - start) / 86400000);
-      }, 0);
-      coveragePct = Math.min(100, Math.round((fetchedDays / totalDays) * 100));
+      if (workerCoverage.length > 0) {
+        const totalDays = Math.max(
+          1,
+          (new Date(today).getTime() - new Date(installDate).getTime()) / 86400000
+        );
+        const fetchedDays = workerCoverage.reduce((sum, c) => {
+          const start = new Date(c.period_start).getTime();
+          const end = new Date(c.period_end).getTime();
+          return sum + Math.max(0, (end - start) / 86400000);
+        }, 0);
+        coveragePct = Math.min(100, Math.round((fetchedDays / totalDays) * 100));
+      }
     }
+
+    // For analysis workers, use the analysis_results computed_at as last_run_at
+    const lastRunAt = def.worker_type === "analysis"
+      ? (analysisResultMap.get(def.id) ?? state?.last_run_at ?? null)
+      : (state?.last_run_at ?? null);
 
     return {
       worker_id: def.id,
@@ -325,7 +347,7 @@ export async function getStatus(
       status: state?.status ?? "idle",
       progress: state?.progress ?? {},
       coverage_pct: coveragePct,
-      last_run_at: state?.last_run_at ?? null,
+      last_run_at: lastRunAt,
       error_message: state?.error_message ?? null,
       pending_units: pendingMap.get(def.id) ?? 0,
     };

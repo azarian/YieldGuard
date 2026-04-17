@@ -7,6 +7,7 @@
 import { registerWorker } from "../engine";
 import inverterTelemetryWorker from "./inverter-telemetry";
 import siteEnergyWorker from "./site-energy";
+import dailyEnergyWorker from "./daily-energy";
 
 let initialized = false;
 
@@ -14,9 +15,9 @@ export function initWorkers(): void {
   if (initialized) return;
   registerWorker(inverterTelemetryWorker);
   registerWorker(siteEnergyWorker);
+  registerWorker(dailyEnergyWorker);
   // Future workers:
   // registerWorker(optimizerTelemetryWorker);
-  // registerWorker(dailyEnergyWorker);
   // registerWorker(soilingAnalysisWorker);
   initialized = true;
 }

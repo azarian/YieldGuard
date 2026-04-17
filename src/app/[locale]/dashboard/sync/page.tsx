@@ -4,225 +4,185 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { SolarEdgeIcon } from "@/components/SolarEdgeLogo";
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
 
-interface SyncJob {
-  id: string;
-  status: string;
-  total_chunks: number;
-  completed_chunks: number;
+interface WorkerProgress {
+  total_units?: number;
+  completed_units?: number;
+  current_item?: string;
+}
+
+interface WorkerStatus {
+  worker_id: string;
+  display_name: string;
+  description: string | null;
+  worker_type: "raw" | "derived" | "analysis";
+  status: "idle" | "running" | "paused" | "error";
+  progress: WorkerProgress;
+  coverage_pct: number;
+  last_run_at: string | null;
   error_message: string | null;
-  created_at: string;
-  updated_at: string;
+  pending_units: number;
 }
 
-interface InventoryData {
+interface PipelineStatus {
+  system_id: string;
   system_name: string;
-  last_synced_at: string | null;
   installation_date: string | null;
-  equipment: Array<{ equipment_type: string }>;
-  inverter_count: number;
-  optimizer_count: number;
-  date_range: { from: string; to: string } | null;
-  sync_history: SyncJob[];
-  portal_configured: boolean;
-  portal_username: string | null;
+  workers: WorkerStatus[];
 }
 
-interface Period { start: string; end: string }
+/* ── Worker Card ─────────────────────────────────────────────────────────── */
 
-interface CoverageData {
-  fetched: Period[];
-  missing: Period[];
-}
-
-interface PeriodsData {
-  installation_date: string | null;
-  inverter: CoverageData & { count: number };
-  optimizer: CoverageData & { count: number };
-  site_energy: CoverageData;
-}
-
-type SyncState = "idle" | "starting" | "running" | "rate_limited" | "complete" | "error";
-
-/* ── Coverage Timeline ───────────────────────────────────────────────────── */
-
-function CoverageTimeline({
-  fetched, missing, installDate,
+function WorkerCard({
+  worker,
+  isActive,
+  onStart,
+  onStop,
 }: {
-  fetched: Period[];
-  missing: Period[];
-  installDate: string | null;
+  worker: WorkerStatus;
+  isActive: boolean;
+  onStart: () => void;
+  onStop: () => void;
 }) {
-  const t = useTranslations("sync");
-  const today = new Date().toISOString().split("T")[0];
-  const start = installDate ?? "2020-01-01";
-  const rangeStartMs = new Date(start).getTime();
-  const rangeEndMs = new Date(today).getTime();
-  const totalMs = rangeEndMs - rangeStartMs;
-  const totalDays = Math.max(1, Math.ceil(totalMs / 86400000));
+  const pct = worker.progress.total_units
+    ? Math.round(((worker.progress.completed_units ?? 0) / worker.progress.total_units) * 100)
+    : 0;
 
-  function countDays(periods: Period[]): number {
-    let days = 0;
-    for (const p of periods) {
-      const pStart = Math.max(new Date(p.start).getTime(), rangeStartMs);
-      const pEnd = Math.min(new Date(p.end).getTime(), rangeEndMs);
-      if (pEnd > pStart) days += Math.ceil((pEnd - pStart) / 86400000);
-    }
-    return days;
-  }
-
-  const fetchedDays = countDays(fetched);
-  const missingDays = countDays(missing);
-  const coveredDays = fetchedDays + missingDays;
-  const remainingDays = Math.max(0, totalDays - coveredDays);
-  const pct = totalDays > 0 ? Math.min(100, Math.round((coveredDays / totalDays) * 100)) : 0;
-
-  function positionPct(dateStr: string): number {
-    const ms = new Date(dateStr).getTime() - rangeStartMs;
-    return Math.max(0, Math.min(100, (ms / totalMs) * 100));
-  }
-
-  const hasPeriods = fetched.length > 0 || missing.length > 0;
+  const statusColors: Record<string, string> = {
+    idle: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+    running: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    paused: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    error: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  };
 
   return (
-    <div>
-      <div className="relative h-5 overflow-hidden rounded-full bg-border-light">
-        {fetched.map((p, i) => {
-          const left = positionPct(p.start);
-          const right = positionPct(p.end);
-          const width = Math.max(0.5, right - left);
-          return (
-            <div key={`f${i}`} className="absolute inset-y-0 rounded-full bg-accent/70"
-              style={{ left: `${left}%`, width: `${width}%` }}
-              title={`${t("fetchedLabel")}: ${p.start} → ${p.end}`} />
-          );
-        })}
-        {missing.map((p, i) => {
-          const left = positionPct(p.start);
-          const right = positionPct(p.end);
-          const width = Math.max(0.5, right - left);
-          return (
-            <div key={`m${i}`} className="absolute inset-y-0 rounded-full bg-muted-light/50"
-              style={{ left: `${left}%`, width: `${width}%`, backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 6px)" }}
-              title={`${t("missingLabel")}: ${p.start} → ${p.end}`} />
-          );
-        })}
+    <div className="rounded-xl border border-border bg-surface p-5">
+      <div className="flex items-center justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-foreground">{worker.display_name}</h3>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${statusColors[worker.status]}`}>
+              {worker.status}
+            </span>
+          </div>
+          {worker.description && (
+            <p className="mt-0.5 text-xs text-muted">{worker.description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {worker.status === "running" || worker.status === "paused" ? (
+            <button
+              onClick={onStop}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface-hover"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={onStart}
+              disabled={isActive}
+              className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-hover disabled:opacity-50"
+            >
+              {worker.coverage_pct >= 100 ? "Re-sync" : "Start"}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-light">
-        <span>{start}</span>
-        <span className="font-semibold text-muted">{pct}%</span>
-        <span>{today}</span>
+
+      {/* Coverage bar */}
+      <div className="mt-3">
+        <div className="flex items-center justify-between text-[10px] text-muted mb-1">
+          <span>Coverage</span>
+          <span className="font-semibold">{worker.coverage_pct}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-border-light">
+          <div
+            className="h-full rounded-full bg-accent/70 transition-all duration-300"
+            style={{ width: `${worker.coverage_pct}%` }}
+          />
+        </div>
       </div>
-      <div className="mt-1 flex flex-wrap gap-3 text-xs">
-        {hasPeriods ? (
-          <>
-            {fetchedDays > 0 && (
-              <span className="flex items-center gap-1 text-accent">
-                <span className="inline-block h-2 w-2 rounded-sm bg-accent" />
-                {t("totalDaysFetched", { count: fetchedDays })}
-              </span>
+
+      {/* Progress (when running) */}
+      {(worker.status === "running" || worker.status === "paused") && worker.progress.total_units && (
+        <div className="mt-3">
+          <div className="h-2.5 overflow-hidden rounded-full bg-border-light">
+            <div
+              className="h-full rounded-full bg-brand transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="mt-1 flex items-center justify-between text-xs text-muted">
+            <span>
+              {worker.progress.completed_units ?? 0}/{worker.progress.total_units} chunks ({pct}%)
+            </span>
+            {worker.progress.current_item && (
+              <span className="text-muted-light">{worker.progress.current_item}</span>
             )}
-            {missingDays > 0 && (
-              <span className="flex items-center gap-1 text-muted">
-                <span className="inline-block h-2 w-2 rounded-sm bg-muted-light/50" style={{ backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)" }} />
-                {t("totalDaysMissing", { count: missingDays })}
-              </span>
-            )}
-            {remainingDays > 0 && (
-              <span className="flex items-center gap-1 text-muted">
-                <span className="inline-block h-2 w-2 rounded-sm bg-border-light" />
-                {t("totalDaysGap", { count: remainingDays })}
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="text-muted">{t("noPeriodsYet")}</span>
-        )}
-      </div>
+          </div>
+          {worker.status === "paused" && worker.error_message && (
+            <p className="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+              {worker.error_message}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Error message */}
+      {worker.status === "error" && worker.error_message && (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400">{worker.error_message}</p>
+      )}
+
+      {/* Last run */}
+      {worker.last_run_at && worker.status === "idle" && (
+        <p className="mt-2 text-[10px] text-muted-light">
+          Last run: {new Date(worker.last_run_at).toLocaleString()}
+        </p>
+      )}
     </div>
   );
 }
 
-/* ── Sync Progress ───────────────────────────────────────────────────────── */
+/* ── Worker Group ────────────────────────────────────────────────────────── */
 
-function SyncProgress({
-  state, total, completed, equipName, period, rows, countdown,
-  errMsg, label, onStart, onCancel, onDismiss,
+function WorkerGroup({
+  title,
+  icon,
+  workers,
+  activeWorkerId,
+  onStart,
+  onStop,
 }: {
-  state: SyncState; total: number; completed: number;
-  equipName: string; period: string; rows: number; countdown: number;
-  errMsg: string; label: string;
-  onStart: () => void; onCancel: () => void; onDismiss: () => void;
+  title: string;
+  icon: React.ReactNode;
+  workers: WorkerStatus[];
+  activeWorkerId: string | null;
+  onStart: (id: string) => void;
+  onStop: (id: string) => void;
 }) {
-  const t = useTranslations("sync");
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  if (workers.length === 0) return null;
 
-  if (state === "starting") {
-    return (
-      <div className="flex items-center gap-3 rounded-xl border border-brand/20 bg-brand-light/20 p-4">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-        <p className="text-sm font-medium text-foreground">
-          {label === "optimizer" ? t("discoveringOptimizers") : label === "site_energy" ? t("siteEnergySyncing") : t("discovering")}
-        </p>
+  return (
+    <div className="mb-6">
+      <div className="mb-3 flex items-center gap-2">
+        {icon}
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">{title}</h2>
       </div>
-    );
-  }
-
-  if (state === "running" || state === "rate_limited") {
-    return (
-      <div className="rounded-xl border border-brand/20 bg-brand-light/20 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold text-foreground">
-            {state === "rate_limited" ? t("rateLimited") : label === "optimizer" ? t("syncingOptimizers") : t("syncing")}
-          </p>
-          <button onClick={onCancel} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("cancel")}</button>
-        </div>
-        <div className="mb-2 h-3 overflow-hidden rounded-full bg-border-light">
-          <div className="h-full rounded-full bg-brand transition-all duration-300" style={{ width: `${pct}%` }} />
-        </div>
-        <div className="flex items-center justify-between text-xs text-muted">
-          <span>{completed}/{total} {t("chunks")} ({pct}%)</span>
-          {rows > 0 && <span>{rows.toLocaleString()} {t("dataPoints")}</span>}
-        </div>
-        {equipName && <p className="mt-2 text-xs text-muted-light">{t("currentItem", { equipment: equipName, period })}</p>}
-        {state === "rate_limited" && countdown > 0 && (
-          <p className="mt-2 text-xs font-medium text-brand">{t("resumingIn", { seconds: countdown })}</p>
-        )}
+      <div className="space-y-3">
+        {workers.map((w) => (
+          <WorkerCard
+            key={w.worker_id}
+            worker={w}
+            isActive={activeWorkerId !== null && activeWorkerId !== w.worker_id}
+            onStart={() => onStart(w.worker_id)}
+            onStop={() => onStop(w.worker_id)}
+          />
+        ))}
       </div>
-    );
-  }
-
-  if (state === "complete") {
-    return (
-      <div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-light/20 p-4">
-        <svg className="h-5 w-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <div className="flex-1">
-          <p className="text-sm font-semibold text-foreground">{t("complete")}</p>
-          {rows > 0 && <p className="text-xs text-muted">{t("completeSummary", { count: rows.toLocaleString() })}</p>}
-        </div>
-        <button onClick={onDismiss} className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted hover:bg-surface-hover">{t("dismiss")}</button>
-      </div>
-    );
-  }
-
-  if (state === "error") {
-    return (
-      <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-800 dark:bg-red-900/10">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-red-700 dark:text-red-400">{t("error")}</p>
-          <button onClick={onStart} className="rounded-lg bg-brand px-3 py-1 text-xs font-medium text-white hover:bg-brand-hover">{t("retry")}</button>
-        </div>
-        {errMsg && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{errMsg}</p>}
-      </div>
-    );
-  }
-
-  return null;
+    </div>
+  );
 }
 
 /* ── Page ─────────────────────────────────────────────────────────────────── */
@@ -231,528 +191,370 @@ export default function SyncPage() {
   const t = useTranslations("sync");
   const supabase = createClient();
 
+  const getToken = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }, [supabase]);
+
   const [loading, setLoading] = useState(true);
-  const [inventory, setInventory] = useState<InventoryData | null>(null);
-  const [periods, setPeriods] = useState<PeriodsData | null>(null);
+  const [status, setStatus] = useState<PipelineStatus | null>(null);
+  const [activeWorkerId, setActiveWorkerId] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
+  const [countdown, setCountdown] = useState(0);
+  const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
-  // Inverter sync
-  const [invFrom, setInvFrom] = useState("");
-  const [invTo, setInvTo] = useState("");
-  const [invState, setInvState] = useState<SyncState>("idle");
-  const [invJobId, setInvJobId] = useState<string | null>(null);
-  const [invTotal, setInvTotal] = useState(0);
-  const [invCompleted, setInvCompleted] = useState(0);
-  const [invEquip, setInvEquip] = useState("");
-  const [invPeriod, setInvPeriod] = useState("");
-  const [invError, setInvError] = useState("");
-  const [invRetry, setInvRetry] = useState(0);
-  const [invRows, setInvRows] = useState(0);
-  const invCancelled = useRef(false);
-
-  // Site energy sync
-  const [seFrom, setSeFrom] = useState("");
-  const [seTo, setSeTo] = useState("");
-  const [seState, setSeState] = useState<SyncState>("idle");
-  const [seError, setSeError] = useState("");
-  const [seRows, setSeRows] = useState(0);
-
-  // Optimizer sync
-  const [optFrom, setOptFrom] = useState("");
-  const [optTo, setOptTo] = useState("");
-  const [optState, setOptState] = useState<SyncState>("idle");
-  const [optJobId, setOptJobId] = useState<string | null>(null);
-  const [optTotal, setOptTotal] = useState(0);
-  const [optCompleted, setOptCompleted] = useState(0);
-  const [optEquip, setOptEquip] = useState("");
-  const [optPeriod, setOptPeriod] = useState("");
-  const [optError, setOptError] = useState("");
-  const [optRetry, setOptRetry] = useState(0);
-  const [optRows, setOptRows] = useState(0);
-  const optCancelled = useRef(false);
-
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [clearing, setClearing] = useState<string | null>(null);
-  const [clearConfirmType, setClearConfirmType] = useState<"inverter" | "site_energy" | "optimizer" | null>(null);
-
-  const anySyncing = invState === "running" || invState === "starting" || invState === "rate_limited"
-    || seState === "starting" || optState === "running" || optState === "starting" || optState === "rate_limited";
-
-  async function executeClear(type: "inverter" | "site_energy" | "optimizer") {
-    setClearConfirmType(null);
-    setClearing(type);
+  // Fetch pipeline status
+  const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/solar/sync/clear", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
-      });
+      const res = await fetch("/api/solar/pipeline/status");
       if (res.ok) {
-        await fetchPeriods();
+        const data: PipelineStatus = await res.json();
+        setStatus(data);
+        // Detect if any worker is still running (e.g., from a previous session)
+        const running = data.workers.find((w) => w.status === "running" || w.status === "paused");
+        if (running && !activeWorkerId) {
+          setActiveWorkerId(running.worker_id);
+        }
       }
     } catch { /* ignore */ }
-    setClearing(null);
-  }
-
-  // ── Data fetching ──────────────────────────────────────────────
-
-  const fetchInventory = useCallback(async () => {
-    try {
-      const res = await fetch("/api/solar/sync/inventory");
-      const json = await res.json();
-      if (res.ok) setInventory(json);
-    } catch { /* ignore */ }
-  }, []);
-
-  const fetchPeriods = useCallback(async () => {
-    try {
-      const res = await fetch("/api/solar/sync/periods");
-      const json = await res.json();
-      if (res.ok) {
-        setPeriods(json);
-        const today = new Date().toISOString().split("T")[0];
-        if (!invTo) setInvTo(today);
-        if (!seTo) setSeTo(today);
-        if (!optTo) setOptTo(today);
-        const instDate = json.installation_date;
-        if (!invFrom && instDate) setInvFrom(instDate);
-        if (!seFrom && instDate) setSeFrom(instDate);
-        if (!optFrom && instDate) setOptFrom(instDate);
-      }
-    } catch { /* ignore */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeWorkerId]);
 
   useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
-      await Promise.all([fetchInventory(), fetchPeriods()]);
-      setLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    fetchStatus().then(() => setLoading(false));
+  }, [fetchStatus]);
 
-  // ── Inverter chunk sync ────────────────────────────────────────
-
+  // Countdown timer for rate limiting
   useEffect(() => {
-    if (invRetry <= 0) return;
-    const timer = setTimeout(() => setInvRetry((c) => c - 1), 1000);
+    if (countdown <= 0) return;
+    const timer = setTimeout(() => setCountdown((c) => c - 1), 1000);
     return () => clearTimeout(timer);
-  }, [invRetry]);
+  }, [countdown]);
 
+  // Resume processing after countdown
   useEffect(() => {
-    if (invState === "rate_limited" && invRetry === 0 && invJobId) {
-      setInvState("running");
-      processInvChunks(invJobId);
+    if (countdown === 0 && activeWorkerId) {
+      const worker = status?.workers.find((w) => w.worker_id === activeWorkerId);
+      if (worker?.status === "paused") {
+        processLoop(activeWorkerId);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invRetry, invState]);
+  }, [countdown]);
 
-  async function processInvChunks(jid: string) {
-    while (!invCancelled.current) {
+  // Process loop — polls /pipeline/process until done
+  async function processLoop(workerId: string) {
+    cancelledRef.current = false;
+
+    while (!cancelledRef.current) {
       try {
-        const res = await fetch("/api/solar/sync/chunk", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jid }),
+        const res = await fetch("/api/solar/pipeline/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ worker_id: workerId }),
         });
+
+        if (res.status === 429) {
+          const json = await res.json();
+          const retryAfter = json.result?.retry_after ?? 60;
+          setCountdown(retryAfter);
+          await fetchStatus();
+          return; // countdown effect will resume
+        }
+
         const json = await res.json();
-        if (!res.ok) { setInvError(json.error || "Unknown error"); setInvState("error"); return; }
-        setInvTotal(json.total_chunks ?? 0);
-        setInvCompleted(json.completed_chunks ?? 0);
-        if (json.current_equipment) setInvEquip(json.current_equipment);
-        if (json.current_period) setInvPeriod(json.current_period);
-        if (json.rows_inserted) setInvRows((p) => p + json.rows_inserted);
-        if (json.status === "rate_limited") { setInvRetry(json.retry_after ?? 60); setInvState("rate_limited"); return; }
-        if (json.done || json.status === "complete") { setInvState("complete"); fetchInventory(); fetchPeriods(); return; }
+        await fetchStatus();
+
+        if (json.done) {
+          showToast("success", json.status === "complete" ? "Worker completed successfully" : "Worker finished");
+          setActiveWorkerId(null);
+          return;
+        }
+
         await new Promise((r) => setTimeout(r, 200));
-      } catch (err) { setInvError(err instanceof Error ? err.message : "Network error"); setInvState("error"); return; }
+      } catch {
+        await fetchStatus();
+        setActiveWorkerId(null);
+        return;
+      }
     }
   }
 
-  async function handleInvSync() {
-    invCancelled.current = false;
-    setInvState("starting"); setInvError(""); setInvRows(0); setInvCompleted(0); setInvTotal(0);
-    try {
-      const res = await fetch("/api/solar/sync", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date_from: invFrom || undefined, date_to: invTo || undefined }),
-      });
-      const json = await res.json();
-      if (!res.ok) { setInvError(json.message || json.error || "Failed"); setInvState("error"); return; }
-      if (json.status === "complete" && !json.job_id) { setInvState("complete"); fetchInventory(); fetchPeriods(); return; }
-      const jid = json.job_id; setInvJobId(jid); setInvTotal(json.total_chunks ?? 0);
-      setInvState("running"); await processInvChunks(jid);
-    } catch (err) { setInvError(err instanceof Error ? err.message : "Network error"); setInvState("error"); }
+  // Show a toast notification
+  function showToast(type: "success" | "error", message: string) {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 5000);
   }
 
-  // ── Site energy sync ───────────────────────────────────────────
-
-  async function handleSeSync() {
-    setSeState("starting"); setSeError(""); setSeRows(0);
+  // Start a worker
+  async function handleStart(workerId: string) {
+    setActiveWorkerId(workerId);
+    setToast(null);
     try {
-      const res = await fetch("/api/solar/sync/site-energy", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date_from: seFrom || undefined, date_to: seTo || undefined }),
+      const res = await fetch("/api/solar/pipeline/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ worker_id: workerId }),
       });
       const json = await res.json();
-      if (!res.ok) { setSeError(json.error || "Failed"); setSeState("error"); return; }
-      if (json.status === "up_to_date") { setSeRows(0); setSeState("complete"); return; }
-      setSeRows(json.records_stored ?? 0);
-      setSeState("complete");
-      fetchPeriods();
-    } catch (err) { setSeError(err instanceof Error ? err.message : "Network error"); setSeState("error"); }
-  }
 
-  // ── Optimizer chunk sync ───────────────────────────────────────
+      if (!res.ok) {
+        showToast("error", json.error || `Failed to start ${workerId}`);
+        setActiveWorkerId(null);
+        return;
+      }
 
-  useEffect(() => {
-    if (optRetry <= 0) return;
-    const timer = setTimeout(() => setOptRetry((c) => c - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [optRetry]);
+      if (json.status === "up_to_date" || json.total_units === 0) {
+        showToast("success", `${workerId}: already up to date`);
+        await fetchStatus();
+        setActiveWorkerId(null);
+        return;
+      }
 
-  useEffect(() => {
-    if (optState === "rate_limited" && optRetry === 0 && optJobId) {
-      setOptState("running");
-      processOptChunks(optJobId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [optRetry, optState]);
-
-  async function processOptChunks(jid: string) {
-    while (!optCancelled.current) {
-      try {
-        const res = await fetch("/api/solar/sync/optimizers/chunk", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jid }),
-        });
-        const json = await res.json();
-        if (!res.ok) { setOptError(json.error || "Unknown error"); setOptState("error"); return; }
-        setOptTotal(json.total_chunks ?? 0);
-        setOptCompleted(json.completed_chunks ?? 0);
-        if (json.current_equipment) setOptEquip(json.current_equipment);
-        if (json.current_period) setOptPeriod(json.current_period);
-        if (json.rows_inserted) setOptRows((p) => p + json.rows_inserted);
-        if (json.status === "rate_limited") { setOptRetry(json.retry_after ?? 60); setOptState("rate_limited"); return; }
-        if (json.done || json.status === "complete") { setOptState("complete"); fetchInventory(); fetchPeriods(); return; }
-        await new Promise((r) => setTimeout(r, 300));
-      } catch (err) { setOptError(err instanceof Error ? err.message : "Network error"); setOptState("error"); return; }
+      showToast("success", `Started ${workerId}: ${json.total_units} chunks to process`);
+      await fetchStatus();
+      await processLoop(workerId);
+    } catch (err) {
+      showToast("error", `Failed to start ${workerId}`);
+      await fetchStatus();
+      setActiveWorkerId(null);
     }
   }
 
-  async function handleOptSync() {
-    optCancelled.current = false;
-    setOptState("starting"); setOptError(""); setOptRows(0); setOptCompleted(0); setOptTotal(0);
+  // Stop a worker
+  async function handleStop(workerId: string) {
+    cancelledRef.current = true;
     try {
-      const res = await fetch("/api/solar/sync/optimizers", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date_from: optFrom || undefined, date_to: optTo || undefined }),
+      await fetch("/api/solar/pipeline/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ worker_id: workerId }),
+      });
+    } catch { /* ignore */ }
+    setActiveWorkerId(null);
+    setCountdown(0);
+    await fetchStatus();
+  }
+
+  // Start all workers in dependency order
+  async function handleSyncAll() {
+    const order = ["inverter_telemetry", "site_energy_15min"];
+    for (const workerId of order) {
+      const worker = status?.workers.find((w) => w.worker_id === workerId);
+      if (worker && worker.coverage_pct < 100) {
+        await handleStart(workerId);
+        // Wait a beat between workers
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+  }
+
+  // Run soiling analysis
+  async function handleRunSoiling() {
+    setActiveWorkerId("soiling_analysis");
+    setToast(null);
+    const token = await getToken();
+    if (!token) { showToast("error", "Not authenticated"); setActiveWorkerId(null); return; }
+    try {
+      const res = await fetch("/api/py/analyze/soiling/run", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
       });
       const json = await res.json();
-      if (!res.ok) { setOptError(json.message || json.error || "Failed"); setOptState("error"); return; }
-      if (json.status === "complete" && !json.job_id) { setOptState("complete"); fetchInventory(); fetchPeriods(); return; }
-      const jid = json.job_id; setOptJobId(jid); setOptTotal(json.total_chunks ?? 0);
-      setOptState("running"); await processOptChunks(jid);
-    } catch (err) { setOptError(err instanceof Error ? err.message : "Network error"); setOptState("error"); }
+      if (!res.ok) {
+        showToast("error", json.detail || json.error || "Soiling analysis failed");
+      } else {
+        showToast("success", json.cached ? "Soiling analysis is up to date (cached)" : "Soiling analysis completed");
+      }
+    } catch {
+      showToast("error", "Failed to run soiling analysis");
+    }
+    setActiveWorkerId(null);
+    await fetchStatus();
+  }
+
+  // Backfill soiling analysis
+  async function handleBackfillSoiling() {
+    setActiveWorkerId("soiling_analysis");
+    setToast(null);
+    const token = await getToken();
+    if (!token) { showToast("error", "Not authenticated"); setActiveWorkerId(null); return; }
+    try {
+      const res = await fetch("/api/py/analyze/soiling/backfill", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        showToast("error", json.detail || json.error || "Soiling backfill failed");
+      } else {
+        showToast("success", "Soiling analysis backfilled successfully");
+      }
+    } catch {
+      showToast("error", "Failed to backfill soiling analysis");
+    }
+    setActiveWorkerId(null);
+    await fetchStatus();
   }
 
   /* ── Render ──────────────────────────────────────────────────── */
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-5xl px-6 py-12">
+      <div className="mx-auto max-w-3xl px-6 py-12">
         <div className="h-8 w-48 animate-pulse rounded-lg bg-border-light" />
         <div className="mt-6 space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-48 animate-pulse rounded-2xl bg-border-light" />
+            <div key={i} className="h-32 animate-pulse rounded-2xl bg-border-light" />
           ))}
         </div>
       </div>
     );
   }
 
-  const inputClass = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50";
-  const installDate = periods?.installation_date ?? inventory?.installation_date ?? null;
+  const rawWorkers = status?.workers.filter((w) => w.worker_type === "raw") ?? [];
+  const derivedWorkers = status?.workers.filter((w) => w.worker_type === "derived") ?? [];
+  const analysisWorkers = status?.workers.filter((w) => w.worker_type === "analysis") ?? [];
+  const anySyncing = activeWorkerId !== null;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-3xl px-6 py-8">
       {/* Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <Link href="/dashboard" className="mb-3 inline-flex items-center gap-1 text-sm text-muted hover:text-foreground">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
           </svg>
           {t("backToDashboard")}
         </Link>
-        <h1 className="text-3xl font-bold text-foreground">{t("pageTitle")}</h1>
-        <p className="mt-1 text-sm text-muted">{t("pageSubtitle")}</p>
-      </div>
-
-      {/* ── Card 1: Inverter Telemetry ───────────────────────────── */}
-      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-            </svg>
-            <h2 className="text-lg font-semibold text-foreground">{t("inverterData")}</h2>
-            {(periods?.inverter?.count ?? 0) > 0 && (
-              <span className="text-xs text-muted">({periods?.inverter?.count} {t("inverterLabel")})</span>
-            )}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">{t("pageTitle")}</h1>
+            <p className="mt-1 text-sm text-muted">{t("pageSubtitle")}</p>
           </div>
-          {(periods?.inverter?.fetched?.length ?? 0) > 0 && (
-            <button onClick={() => setClearConfirmType("inverter")} disabled={anySyncing || clearing === "inverter"}
-              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
-              {clearing === "inverter" ? (
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
-              ) : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
-            </button>
-          )}
-        </div>
-        <p className="mb-4 text-xs text-muted">{t("inverterSyncDesc")}</p>
-
-        <CoverageTimeline
-          fetched={periods?.inverter?.fetched ?? []}
-          missing={periods?.inverter?.missing ?? []}
-          installDate={installDate}
-        />
-
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
-            <input type="date" value={invFrom} onChange={(e) => setInvFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
-          </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
-            <input type="date" value={invTo} onChange={(e) => setInvTo(e.target.value)} disabled={anySyncing} className={inputClass} />
-          </div>
-          {invState === "idle" && (
-            <button onClick={handleInvSync} disabled={anySyncing}
-              className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
-              {t("startSync")}
-            </button>
-          )}
-        </div>
-
-        <div className="mt-4">
-          <SyncProgress state={invState} total={invTotal} completed={invCompleted}
-            equipName={invEquip} period={invPeriod} rows={invRows} countdown={invRetry}
-            errMsg={invError} label="inverter"
-            onStart={handleInvSync} onCancel={() => { invCancelled.current = true; setInvState("idle"); }}
-            onDismiss={() => setInvState("idle")} />
-        </div>
-      </div>
-
-      {/* ── Card 2: Site Energy (15-min) ─────────────────────────── */}
-      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
-            </svg>
-            <h2 className="text-lg font-semibold text-foreground">{t("siteEnergySyncTitle")}</h2>
-          </div>
-          {(periods?.site_energy?.fetched?.length ?? 0) > 0 && (
-            <button onClick={() => setClearConfirmType("site_energy")} disabled={anySyncing || clearing === "site_energy"}
-              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
-              {clearing === "site_energy" ? (
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
-              ) : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
-            </button>
-          )}
-        </div>
-        <p className="mb-4 text-xs text-muted">{t("siteEnergySyncDesc")}</p>
-
-        <CoverageTimeline
-          fetched={periods?.site_energy?.fetched ?? []}
-          missing={periods?.site_energy?.missing ?? []}
-          installDate={installDate}
-        />
-
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
-            <input type="date" value={seFrom} onChange={(e) => setSeFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
-          </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
-            <input type="date" value={seTo} onChange={(e) => setSeTo(e.target.value)} disabled={anySyncing} className={inputClass} />
-          </div>
-          {seState === "idle" && (
-            <button onClick={handleSeSync} disabled={anySyncing}
-              className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
-              {t("startSync")}
-            </button>
-          )}
-        </div>
-
-        <div className="mt-4">
-          <SyncProgress state={seState} total={1} completed={seState === "complete" ? 1 : 0}
-            equipName="" period="" rows={seRows} countdown={0}
-            errMsg={seError} label="site_energy"
-            onStart={handleSeSync} onCancel={() => setSeState("idle")}
-            onDismiss={() => setSeState("idle")} />
-        </div>
-      </div>
-
-      {/* ── Card 3: Optimizer Telemetry ───────────────────────────── */}
-      <div className="mb-6 rounded-2xl border border-border bg-surface p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <SolarEdgeIcon className="h-5 w-5" />
-            <h2 className="text-lg font-semibold text-foreground">{t("optimizerSyncTitle")}</h2>
-            {(periods?.optimizer?.count ?? 0) > 0 && (
-              <span className="text-xs text-muted">({periods?.optimizer?.count} {t("optimizers")})</span>
-            )}
-          </div>
-          {(periods?.optimizer?.fetched?.length ?? 0) > 0 && (
-            <button onClick={() => setClearConfirmType("optimizer")} disabled={anySyncing || clearing === "optimizer"}
-              className="text-muted hover:text-red-600 disabled:opacity-50" title={t("clearData")}>
-              {clearing === "optimizer" ? (
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
-              ) : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
-            </button>
-          )}
-        </div>
-        <p className="mb-4 text-xs text-muted">{t("optimizerSyncDesc")}</p>
-
-        {!inventory?.portal_configured ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-900/10">
-            <p className="mb-1 text-sm font-medium text-amber-800 dark:text-amber-300">{t("portalNotConfigured")}</p>
-            <p className="mb-3 text-xs text-amber-700 dark:text-amber-400">{t("portalNotConfiguredDesc")}</p>
-            <Link href="/dashboard/system"
-              className="inline-flex items-center gap-1 rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-hover">
-              {t("configureCreds")}
-            </Link>
-          </div>
-        ) : (
-          <>
-            <p className="mb-4 text-xs font-medium text-accent">{t("portalConnectedAs", { username: inventory?.portal_username ?? "" })}</p>
-
-            <CoverageTimeline
-              fetched={periods?.optimizer?.fetched ?? []}
-              missing={periods?.optimizer?.missing ?? []}
-              installDate={installDate}
-            />
-
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-foreground">{t("dateFrom")}</label>
-                <input type="date" value={optFrom} onChange={(e) => setOptFrom(e.target.value)} disabled={anySyncing} className={inputClass} />
-              </div>
-              <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-foreground">{t("dateTo")}</label>
-                <input type="date" value={optTo} onChange={(e) => setOptTo(e.target.value)} disabled={anySyncing} className={inputClass} />
-              </div>
-              {optState === "idle" && (
-                <button onClick={handleOptSync} disabled={anySyncing}
-                  className="rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-hover disabled:opacity-50">
-                  {t("startSync")}
-                </button>
-              )}
-            </div>
-
-            <div className="mt-4">
-              <SyncProgress state={optState} total={optTotal} completed={optCompleted}
-                equipName={optEquip} period={optPeriod} rows={optRows} countdown={optRetry}
-                errMsg={optError} label="optimizer"
-                onStart={handleOptSync} onCancel={() => { optCancelled.current = true; setOptState("idle"); }}
-                onDismiss={() => setOptState("idle")} />
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* ── Sync History ─────────────────────────────────────────── */}
-      {inventory && inventory.sync_history.length > 0 && (
-        <div className="rounded-2xl border border-border bg-surface">
-          <button type="button" onClick={() => setHistoryOpen(!historyOpen)}
-            className="flex w-full items-center justify-between p-5 text-start">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-light">
-                <svg className="h-5 w-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-foreground">{t("syncHistory")}</p>
-                <p className="mt-0.5 text-xs text-muted">{historyOpen ? t("hideHistory") : t("showHistory")}</p>
-              </div>
-            </div>
-            <svg className={`h-5 w-5 text-muted transition-transform ${historyOpen ? "rotate-180" : ""}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
+          <button
+            onClick={handleSyncAll}
+            disabled={anySyncing}
+            className="rounded-xl bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover disabled:opacity-50"
+          >
+            Sync All Data
           </button>
-
-          {historyOpen && (
-            <div className="border-t border-border px-5 pb-5 pt-4">
-              <div className="space-y-2">
-                {inventory.sync_history.map((job) => {
-                  const statusColors: Record<string, string> = {
-                    complete: "bg-accent-light text-accent dark:bg-green-900/30 dark:text-green-400",
-                    running: "bg-brand-light text-brand dark:bg-yellow-900/30 dark:text-yellow-400",
-                    paused: "bg-brand-light text-brand dark:bg-yellow-900/30 dark:text-yellow-400",
-                    error: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-                  };
-                  return (
-                    <div key={job.id} className="flex items-center justify-between rounded-xl border border-border p-3">
-                      <div className="flex items-center gap-3">
-                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${statusColors[job.status] ?? statusColors.error}`}>
-                          {job.status}
-                        </span>
-                        <span className="text-sm text-foreground">
-                          {job.completed_chunks}/{job.total_chunks} {t("chunks")}
-                        </span>
-                      </div>
-                      <span className="text-xs text-muted">{new Date(job.created_at).toLocaleString()}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
-      )}
+      </div>
 
-      {/* ── Clear Confirmation Modal ─────────────────────────────── */}
-      {clearConfirmType && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6 shadow-xl">
-            <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
-                <svg className="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-foreground">{t("clearData")}</h3>
-            </div>
-            <p className="mb-6 text-sm text-muted">{t("clearConfirm")}</p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setClearConfirmType(null)}
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted hover:bg-surface-hover">
-                {t("cancel")}
-              </button>
-              <button onClick={() => executeClear(clearConfirmType)}
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
-                {t("clearData")}
-              </button>
-            </div>
+      {/* System info */}
+      {status && (
+        <div className="mb-6 rounded-xl border border-border bg-surface p-4">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-medium text-foreground">{status.system_name}</span>
+            <span className="text-xs text-muted">
+              Installed: {status.installation_date ?? "Unknown"}
+            </span>
           </div>
         </div>
       )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className={`mb-4 rounded-xl border p-3 text-sm ${
+          toast.type === "error"
+            ? "border-red-200 bg-red-50/50 text-red-700 dark:border-red-800 dark:bg-red-900/10 dark:text-red-400"
+            : "border-accent/20 bg-accent-light/20 text-accent"
+        }`}>
+          {toast.message}
+        </div>
+      )}
+
+      {/* Rate limit countdown */}
+      {countdown > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-800 dark:bg-amber-900/10">
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            Rate limited by SolarEdge — resuming in {countdown}s...
+          </p>
+        </div>
+      )}
+
+      {/* Raw Data Workers */}
+      <WorkerGroup
+        title="Raw Data"
+        icon={
+          <svg className="h-4 w-4 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+          </svg>
+        }
+        workers={rawWorkers}
+        activeWorkerId={activeWorkerId}
+        onStart={handleStart}
+        onStop={handleStop}
+      />
+
+      {/* Derived Data Workers */}
+      <WorkerGroup
+        title="Derived Data"
+        icon={
+          <svg className="h-4 w-4 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+          </svg>
+        }
+        workers={derivedWorkers}
+        activeWorkerId={activeWorkerId}
+        onStart={handleStart}
+        onStop={handleStop}
+      />
+
+      {/* Analysis Workers */}
+      <div className="mb-6">
+        <div className="mb-3 flex items-center gap-2">
+          <svg className="h-4 w-4 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611l-.772.136a18.156 18.156 0 01-6.326 0l-.772-.136c-1.717-.293-2.3-2.379-1.067-3.61L5 14.5" />
+          </svg>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">Analysis</h2>
+        </div>
+        <div className="space-y-3">
+          {analysisWorkers.map((w) => (
+            <div key={w.worker_id} className="rounded-xl border border-border bg-surface p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-foreground">{w.display_name}</h3>
+                  {w.description && (
+                    <p className="mt-0.5 text-xs text-muted">{w.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {w.worker_id === "soiling_analysis" && (
+                    <>
+                      <button
+                        onClick={handleRunSoiling}
+                        disabled={anySyncing}
+                        className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-hover disabled:opacity-50"
+                      >
+                        Run
+                      </button>
+                      <button
+                        onClick={handleBackfillSoiling}
+                        disabled={anySyncing}
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface-hover disabled:opacity-50"
+                      >
+                        Backfill
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {w.last_run_at && (
+                <p className="mt-2 text-[10px] text-muted-light">
+                  Last run: {new Date(w.last_run_at).toLocaleString()}
+                </p>
+              )}
+              {activeWorkerId === w.worker_id && (
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+                  <span className="text-xs text-muted">Running analysis...</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
